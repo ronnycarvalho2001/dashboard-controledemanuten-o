@@ -191,20 +191,18 @@ function Legend({ activeLayer }) {
 /* ════════════════════════════════════════════════════════════════════════
    MAPA SVG DE UM SUBCAMPO
    ════════════════════════════════════════════════════════════════════════ */
-function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, selected, multiSelected, dragRect, onSvgMouseDown, onClick, scale }) {
+function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, selected, onClick, scale }) {
   const { trackers, minX, maxY, W, H, pad, padTop, col, row, groups } = geo;
   const markerW = col * 0.82, markerH = row * 0.5;
   const idx = LAYER_IDX[activeLayer];
   const toX = (x) => x - minX + pad;
   const toY = (y) => maxY - y + padTop;
-  const multiSet = useMemo(() => new Set(multiSelected), [multiSelected]);
 
   const vW = W / scale, vH = H / scale;
   const vX = (W - vW) / 2, vY = (H - vH) / 2;
   const sw = Math.max(W, H);
   return (
-    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet"
-      style={{ display: "block", userSelect: "none" }} onMouseDown={onSvgMouseDown}>
+    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
       {showGroups && groups.map((g) => {
         const gx = toX(g.minX) - markerW * 0.65, gy = toY(g.maxY) - markerH * 0.75;
         const gw = (g.maxX - g.minX) + markerW * 1.3, gh = (g.maxY - g.minY) + markerH * 1.5;
@@ -228,16 +226,15 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
         const color = STATE_COLORS[activeLayer][val];
         const dim = filter !== null && val !== filter;
         const isSel = selected === n;
-        const isMulti = multiSet.has(n);
         const cx = toX(x), cy = toY(y);
         const railW = markerW * 0.32;
         const hubH = markerH * 0.13;
         const left = cx - markerW / 2, top = cy - markerH / 2;
         return (
           <g key={n} fill={color} opacity={dim ? 0.16 : 1}
-            stroke={isMulti ? "#ffffff" : isSel ? P.text : "rgba(0,0,0,0.4)"}
-            strokeWidth={isMulti ? sw * 0.004 : isSel ? sw * 0.0026 : sw * 0.0005}
-            style={{ cursor: "crosshair" }}
+            stroke={isSel ? P.text : "rgba(0,0,0,0.4)"}
+            strokeWidth={isSel ? sw * 0.0026 : sw * 0.0005}
+            style={{ cursor: "pointer" }}
             onClick={(e) => onClick(n, e.shiftKey)}
           >
             <title>{`${trackerId(subKey, n)}  •  Grupo ${g}\nLavagem: ${LAYERS[0].states[st[0]]}\nRoçagem: ${LAYERS[1].states[st[1]]}\nTrator: ${LAYERS[2].states[st[2]]}`}</title>
@@ -247,16 +244,6 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
           </g>
         );
       })}
-
-      {dragRect && (() => {
-        const rx = Math.min(dragRect.x1, dragRect.x2), ry = Math.min(dragRect.y1, dragRect.y2);
-        const rw = Math.abs(dragRect.x2 - dragRect.x1), rh = Math.abs(dragRect.y2 - dragRect.y1);
-        const dsw = sw * 0.0012;
-        return <rect x={rx} y={ry} width={rw} height={rh}
-          fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.55)"
-          strokeWidth={dsw} strokeDasharray={`${dsw * 4} ${dsw * 2}`}
-          style={{ pointerEvents: "none" }} />;
-      })()}
     </svg>
   );
 }
@@ -331,11 +318,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const [selected, setSelected] = useState(null);
   const [lastClicked, setLastClicked] = useState(null);
   const [scale, setScale] = useState(1);
-  const [multiSelected, setMultiSelected] = useState([]);
-  const [dragRect, setDragRect] = useState(null);
   const containerRef = useRef(null);
-  const dragRef = useRef({ active: false, moved: false });
-  const wasDragRef = useRef(false);
 
   const applyToTrackers = useCallback((ns, value) => {
     setStatuses((prev) => {
@@ -351,68 +334,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
     });
   }, [subKey, activeLayer, setStatuses]);
 
-  const pixelToSvg = useCallback((clientX, clientY) => {
-    const el = containerRef.current;
-    if (!el) return { x: 0, y: 0 };
-    const r = el.getBoundingClientRect();
-    const vW = geo.W / scale, vH = geo.H / scale;
-    const vX = (geo.W - vW) / 2, vY = (geo.H - vH) / 2;
-    return { x: vX + (clientX - r.left) / r.width * vW, y: vY + (clientY - r.top) / r.height * vH };
-  }, [geo.W, geo.H, scale]);
-
-  const handleSvgMouseDown = useCallback((e) => {
-    if (e.button !== 0) return;
-    const pos = pixelToSvg(e.clientX, e.clientY);
-    dragRef.current = { active: true, x1px: e.clientX, y1px: e.clientY, x1: pos.x, y1: pos.y, x2: pos.x, y2: pos.y, moved: false };
-  }, [pixelToSvg]);
-
-  useEffect(() => {
-    const onMove = (e) => {
-      const dr = dragRef.current;
-      if (!dr.active) return;
-      const dx = e.clientX - dr.x1px, dy = e.clientY - dr.y1px;
-      if (!dr.moved && Math.hypot(dx, dy) < 6) return;
-      dr.moved = true;
-      wasDragRef.current = true;
-      const pos = pixelToSvg(e.clientX, e.clientY);
-      dr.x2 = pos.x; dr.y2 = pos.y;
-      setDragRect({ x1: dr.x1, y1: dr.y1, x2: dr.x2, y2: dr.y2 });
-    };
-    const onUp = () => {
-      const dr = dragRef.current;
-      if (!dr.active) return;
-      dr.active = false;
-      setDragRect(null);
-      setTimeout(() => { wasDragRef.current = false; }, 50);
-      if (!dr.moved) return;
-      const rx1 = Math.min(dr.x1, dr.x2), rx2 = Math.max(dr.x1, dr.x2);
-      const ry1 = Math.min(dr.y1, dr.y2), ry2 = Math.max(dr.y1, dr.y2);
-      const { trackers, minX, maxY: gMaxY, pad, padTop, col, row } = geo;
-      const mW = col * 0.82, mH = row * 0.5;
-      const toX = (x) => x - minX + pad;
-      const toY = (y) => gMaxY - y + padTop;
-      const hits = trackers
-        .filter(([, tx, ty]) => {
-          const cx = toX(tx), cy = toY(ty);
-          return cx - mW / 2 < rx2 && cx + mW / 2 > rx1 && cy - mH / 2 < ry2 && cy + mH / 2 > ry1;
-        })
-        .map(([n]) => n);
-      setMultiSelected(hits);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
-  }, [pixelToSvg, geo]);
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === "Escape") setMultiSelected([]); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
   const handleTrackerClick = useCallback((n, shiftKey) => {
-    if (wasDragRef.current) return;
-    setMultiSelected([]);
     const cur = getStatus(statuses, subKey, n)[LAYER_IDX[activeLayer]];
     const newVal = (cur + 1) % LAYERS.find((l) => l.key === activeLayer).states.length;
     if (shiftKey && lastClicked && lastClicked.subKey === subKey) {
@@ -476,30 +398,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           </div>
           <SubMap geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
             filter={filter} showGroups={showGroups} selected={selected}
-            multiSelected={multiSelected} dragRect={dragRect} onSvgMouseDown={handleSvgMouseDown}
             onClick={handleTrackerClick} scale={scale} />
-          {multiSelected.length > 0 && (
-            <div style={{
-              position: "absolute", bottom: 14, left: "50%", transform: "translateX(-50%)",
-              background: P.card, border: `1px solid ${P.border}`, borderRadius: 10,
-              padding: "8px 12px", display: "flex", gap: 6, alignItems: "center",
-              zIndex: 10, boxShadow: "0 4px 24px #0009", whiteSpace: "nowrap",
-            }}>
-              <span style={{ color: P.muted, fontSize: 11.5, fontFamily: "monospace", marginRight: 4 }}>
-                {multiSelected.length} trackers:
-              </span>
-              {LAYERS.find((l) => l.key === activeLayer).states.map((s, i) => (
-                <button key={i} onClick={() => { applyToTrackers(multiSelected, i); setMultiSelected([]); }} style={{
-                  background: STATE_COLORS[activeLayer][i] + "28",
-                  border: `1px solid ${STATE_COLORS[activeLayer][i]}66`,
-                  color: P.text, borderRadius: 6, padding: "4px 9px", fontSize: 11, cursor: "pointer", fontFamily: "inherit",
-                }}>{s}</button>
-              ))}
-              <button onClick={() => setMultiSelected([])} style={{
-                background: "none", border: "none", color: P.muted, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: "0 2px",
-              }}>✕</button>
-            </div>
-          )}
         </div>
 
         <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
