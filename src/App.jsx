@@ -15,11 +15,18 @@ const SUB_KEYS = Object.keys(PLANT).sort((a, b) => {
 });
 
 const LAYERS = [
-  { key: "lavagem", label: "Lavagem", icon: "💧", states: ["Pendente", "Incompleto", "Concluída"] },
-  { key: "rocagem", label: "Roçagem", icon: "🌾", states: ["Pendente", "Incompleto", "Concluída"] },
-  { key: "trator", label: "Acesso trator", icon: "🚜", states: ["Não avaliado", "Bloqueado", "Liberado"] },
+  { key: "lavagem", label: "Lavagem", icon: "💧",
+    states: ["🔴 NÃO LAVADO", "⚫ PENDENTE 22 MÓDULOS", "🔵 PENDENTE 8 MÓDULOS", "🟡 LAVADO PARCIAL 50%", "✅ LAVADO 100%"],
+    doneIdx: 4, progIdxes: [2, 3] },
+  { key: "rocagem", label: "Roçagem", icon: "🌾",
+    states: ["Pendente", "Incompleto", "Concluída"],
+    doneIdx: 2, progIdxes: [1] },
+  { key: "trator", label: "Acesso trator", icon: "🚜",
+    states: ["Não avaliado", "Bloqueado", "Liberado"],
+    doneIdx: 2, progIdxes: [1] },
 ];
 const LAYER_IDX = { lavagem: 0, rocagem: 1, trator: 2 };
+const LAYER_DONE_IDX = Object.fromEntries(LAYERS.map((l) => [l.key, l.doneIdx]));
 
 const P = {
   bg: "#0d0f14", surface: "#13161d", card: "#181c25", card2: "#1d222d", border: "#252b38",
@@ -29,7 +36,7 @@ const P = {
 };
 
 const STATE_COLORS = {
-  lavagem: [P.border, P.warn, P.accent],
+  lavagem: [P.danger, "#475569", P.info, P.warn, P.accent],
   rocagem: [P.border, P.warn, P.accent],
   trator: [P.border, P.danger, P.accent],
 };
@@ -96,10 +103,12 @@ function getStatus(statuses, subKey, n) {
 }
 function countDone(statuses, subKey, trackers, layerKey) {
   const idx = LAYER_IDX[layerKey];
+  const layer = LAYERS.find((l) => l.key === layerKey);
   let done = 0, prog = 0;
   trackers.forEach(([n]) => {
     const s = getStatus(statuses, subKey, n)[idx];
-    if (s === 2) done++; else if (s === 1) prog++;
+    if (s === layer.doneIdx) done++;
+    else if (layer.progIdxes.includes(s)) prog++;
   });
   return { done, prog, total: trackers.length, pending: trackers.length - done - prog };
 }
@@ -262,7 +271,7 @@ function GroupPanel({ geo, subKey, statuses, activeLayer, onBulk }) {
           }}>
             <span style={{ fontFamily: "monospace", fontSize: 12, color: P.text, fontWeight: 700, width: 26 }}>G{g.g}</span>
             <div style={{ flex: 1 }}>
-              <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[2]} />
+              <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[LAYER_DONE_IDX[activeLayer]]} />
             </div>
             <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "monospace", width: 42, textAlign: "right" }}>{stat.done}/{stat.total}</span>
             <button onClick={() => onBulk(g.trackers.map((t) => t[0]), complete ? 0 : 2)} title={complete ? "Resetar grupo" : "Concluir grupo"} style={{
@@ -333,7 +342,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
 
   const handleTrackerClick = useCallback((n, shiftKey) => {
     const cur = getStatus(statuses, subKey, n)[LAYER_IDX[activeLayer]];
-    const newVal = (cur + 1) % 3;
+    const newVal = (cur + 1) % LAYERS.find((l) => l.key === activeLayer).states.length;
     if (shiftKey && lastClicked && lastClicked.subKey === subKey) {
       const lo = Math.min(lastClicked.n, n), hi = Math.max(lastClicked.n, n);
       const ns = [];
@@ -369,9 +378,9 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
         <LayerTabs active={activeLayer} onChange={setActiveLayer} />
         <div style={{ flex: 1, minWidth: 160 }}>
-          <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[2]} />
+          <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[LAYER_DONE_IDX[activeLayer]]} />
         </div>
-        <span style={{ fontFamily: "monospace", fontSize: 12, color: colors[2], fontWeight: 700 }}>✓ {stat.done}</span>
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: colors[LAYER_DONE_IDX[activeLayer]], fontWeight: 700 }}>✓ {stat.done}</span>
         {stat.prog > 0 && <span style={{ fontFamily: "monospace", fontSize: 12, color: P.warn, fontWeight: 700 }}>½ {stat.prog}</span>}
         <span style={{ fontFamily: "monospace", fontSize: 12, color: P.muted }}>/{stat.total}</span>
       </div>
@@ -406,7 +415,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                 {LAYERS.map((l, i) => (
                   <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <span style={{ fontSize: 11.5, color: P.muted, width: 92 }}>{l.icon} {l.label}</span>
-                    <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % 3)} style={{
+                    <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % LAYERS[i].states.length)} style={{
                       background: STATE_COLORS[l.key][selStatus[i]] + "33", border: `1px solid ${STATE_COLORS[l.key][selStatus[i]]}77`,
                       color: P.text, borderRadius: 6, padding: "4px 9px", fontSize: 11.5, cursor: "pointer", fontFamily: "inherit",
                     }}>{l.states[selStatus[i]]}</button>
@@ -594,7 +603,7 @@ function OverviewCards({ statuses, activeLayer, onSelect }) {
             borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit",
           }}>
             <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 6 }}>SDM {key}</div>
-            <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[2]} />
+            <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[LAYER_DONE_IDX[activeLayer]]} />
             <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginTop: 6 }}>{stat.done}/{stat.total} · {pct}%</div>
           </button>
         );
@@ -687,9 +696,11 @@ export default function App() {
     const allPoints = SUB_KEYS.flatMap((k) => PLANT[k].t.map((t) => ({ key: k, n: t[0] })));
     const idx = LAYER_IDX[activeLayer];
     let done = 0, prog = 0;
+    const layer = LAYERS.find((l) => l.key === activeLayer);
     allPoints.forEach((p) => {
       const v = getStatus(statuses, p.key, p.n)[idx];
-      if (v === 2) done++; else if (v === 1) prog++;
+      if (v === layer.doneIdx) done++;
+      else if (layer.progIdxes.includes(v)) prog++;
     });
     return { done, prog, total: allPoints.length };
   }, [statuses, activeLayer]);
@@ -727,9 +738,9 @@ export default function App() {
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
               <LayerTabs active={activeLayer} onChange={setActiveLayer} />
               <div style={{ flex: 1, minWidth: 160 }}>
-                <ProgressBar done={globalStat.done} prog={globalStat.prog} total={globalStat.total} color={STATE_COLORS[activeLayer][2]} />
+                <ProgressBar done={globalStat.done} prog={globalStat.prog} total={globalStat.total} color={STATE_COLORS[activeLayer][LAYER_DONE_IDX[activeLayer]]} />
               </div>
-              <span style={{ fontFamily: "monospace", fontSize: 12, color: STATE_COLORS[activeLayer][2], fontWeight: 700 }}>
+              <span style={{ fontFamily: "monospace", fontSize: 12, color: STATE_COLORS[activeLayer][LAYER_DONE_IDX[activeLayer]], fontWeight: 700 }}>
                 ✓ {globalStat.done}
               </span>
               {globalStat.prog > 0 && (
