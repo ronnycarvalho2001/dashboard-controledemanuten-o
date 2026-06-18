@@ -202,7 +202,7 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
   const vX = (W - vW) / 2, vY = (H - vH) / 2;
   const sw = Math.max(W, H);
   return (
-    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
+    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", cursor: "default" }}>
       {showGroups && groups.map((g) => {
         const gx = toX(g.minX) - markerW * 0.65, gy = toY(g.maxY) - markerH * 0.75;
         const gw = (g.maxX - g.minX) + markerW * 1.3, gh = (g.maxY - g.minY) + markerH * 1.5;
