@@ -558,8 +558,10 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
             <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
               <rect x={bx} y={by} width={bw} height={bh} rx={10}
                 fill={P.card} stroke={pct === 1 ? P.accent : P.border} strokeWidth={2} opacity={0.9} />
-              <text x={bx + 8} y={by + 22} fontSize={16} fill={P.text} fontFamily="monospace" fontWeight="700">SDM {b.key}</text>
-              <text x={bx + 8} y={by + 40} fontSize={13} fill={pct === 1 ? P.accent : P.muted} fontFamily="monospace">{stat.done}/{stat.total} · {Math.round(pct * 100)}%</text>
+              <rect x={bx} y={by - 38} width={bw} height={34} rx={8}
+                fill={P.bg} stroke={pct === 1 ? P.accent : P.border} strokeWidth={1.5} opacity={0.95} />
+              <text x={bx + 10} y={by - 22} fontSize={14} fill={P.text} fontFamily="monospace" fontWeight="700">SDM {b.key}</text>
+              <text x={bx + 10} y={by - 8} fontSize={11} fill={pct === 1 ? P.accent : P.muted} fontFamily="monospace">{stat.done}/{stat.total} · {Math.round(pct * 100)}%</text>
             </g>
           );
         })}
