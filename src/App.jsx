@@ -465,10 +465,10 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
   }, []);
 
   const idx = LAYER_IDX[activeLayer];
-  const pad = 30;
-  const W = maxX - minX + pad * 2, H = maxY - minY + pad * 2;
+  const pad = 30, padTop = 55;
+  const W = maxX - minX + pad * 2, H = maxY - minY + pad + padTop;
   const toX = (x) => x - minX + pad;
-  const toY = (y) => maxY - y + pad;
+  const toY = (y) => maxY - y + padTop;
   const markerW = 9, markerH = 22;
 
   const subBoxes = useMemo(() => SUB_KEYS.map((key) => {
