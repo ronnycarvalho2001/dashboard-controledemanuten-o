@@ -185,10 +185,6 @@ function Legend({ activeLayer }) {
           {s}
         </div>
       ))}
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        <div style={{ width: 10, height: 10, borderRadius: "50%", background: P.purple }} />
-        NCU / RSU
-      </div>
     </div>
   );
 }
@@ -203,8 +199,10 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
   const toX = (x) => x - minX + pad;
   const toY = (y) => maxY - y + pad;
 
+  const vW = W / scale, vH = H / scale;
+  const vX = (W - vW) / 2, vY = (H - vH) / 2;
   return (
-    <svg width={W * scale} height={H * scale} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
+    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
       {showGroups && groups.map((g) => {
         const gx = toX(g.minX) - markerW * 0.65, gy = toY(g.maxY) - markerH * 0.75;
         const gw = (g.maxX - g.minX) + markerW * 1.3, gh = (g.maxY - g.minY) + markerH * 1.5;
@@ -253,15 +251,6 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
         );
       })}
 
-      {cmd.map(([tag, x, y]) => {
-        const label = tag.includes("NCU") ? "NCU" : tag.includes("RSU") ? "RSU" : tag;
-        return (
-          <g key={tag}>
-            <circle cx={toX(x)} cy={toY(y)} r={Math.min(markerW, markerH) * 0.42} fill={P.purple} stroke={P.bg} strokeWidth={Math.max(W, H) * 0.0012} />
-            <text x={toX(x) + markerW * 0.5} y={toY(y) + row * 0.05} fontSize={row * 0.1} fill={P.purple} fontFamily="monospace">{label}</text>
-          </g>
-        );
-      })}
     </svg>
   );
 }
@@ -335,15 +324,8 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const [showGroups, setShowGroups] = useState(true);
   const [selected, setSelected] = useState(null);
   const [lastClicked, setLastClicked] = useState(null);
-  const [scale, setScale] = useState(4);
+  const [scale, setScale] = useState(1);
   const containerRef = useRef(null);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const w = el.clientWidth || 600;
-    setScale(Math.max(1.2, Math.min(9, (w - 24) / geo.W)));
-  }, [subKey]);
 
   const applyToTrackers = useCallback((ns, value) => {
     setStatuses((prev) => {
@@ -379,8 +361,8 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const selStatus = selected != null ? getStatus(statuses, subKey, selected) : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0 }}>
         <button onClick={() => onNavigate(null)} style={{
           background: "none", border: `1px solid ${P.border}`, color: P.muted, borderRadius: 7,
           padding: "6px 12px", cursor: "pointer", fontSize: 12.5, fontFamily: "inherit",
@@ -394,7 +376,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </select>
       </div>
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
         <LayerTabs active={activeLayer} onChange={setActiveLayer} />
         <div style={{ flex: 1, minWidth: 160 }}>
           <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[2]} />
@@ -404,7 +386,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </span>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, flexShrink: 0 }}>
         <FilterChips activeLayer={activeLayer} filter={filter} onChange={setFilter} />
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: P.muted, cursor: "pointer" }}>
           <input type="checkbox" checked={showGroups} onChange={(e) => setShowGroups(e.target.checked)} />
@@ -412,20 +394,20 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </label>
       </div>
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
         <div ref={containerRef} style={{
           flex: "2 1 420px", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12,
-          padding: 12, overflow: "auto", maxHeight: "62vh", position: "relative",
+          padding: 12, overflow: "hidden", position: "relative",
         }}>
-          <div style={{ position: "sticky", top: 0, zIndex: 2, display: "flex", gap: 6, marginBottom: 8, justifyContent: "flex-end" }}>
-            <button onClick={() => setScale((s) => Math.min(12, s * 1.25))} style={zoomBtnStyle}>＋</button>
+          <div style={{ position: "absolute", top: 10, right: 10, zIndex: 2, display: "flex", gap: 6 }}>
+            <button onClick={() => setScale((s) => Math.min(8, s * 1.25))} style={zoomBtnStyle}>＋</button>
             <button onClick={() => setScale((s) => Math.max(1, s / 1.25))} style={zoomBtnStyle}>－</button>
           </div>
           <SubMap geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
             filter={filter} showGroups={showGroups} selected={selected} onClick={handleTrackerClick} scale={scale} />
         </div>
 
-        <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
           <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
             <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
             {selected != null ? (
@@ -475,9 +457,6 @@ const zoomBtnStyle = {
    VISÃO GERAL — mapa geral de toda a usina, posições reais
    ════════════════════════════════════════════════════════════════════════ */
 function OverviewMap({ statuses, activeLayer, onSelect }) {
-  const containerRef = useRef(null);
-  const [scale, setScale] = useState(0.5);
-
   const { all, minX, maxX, minY, maxY } = useMemo(() => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     const all = [];
@@ -489,13 +468,6 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
       });
     });
     return { all, minX, maxX, minY, maxY };
-  }, []);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const w = el.clientWidth || 900;
-    setScale(Math.max(0.12, Math.min(2, (w - 24) / (maxX - minX + 60))));
   }, []);
 
   const idx = LAYER_IDX[activeLayer];
@@ -512,15 +484,12 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
   }), []);
 
   return (
-    <div ref={containerRef} style={{
+    <div style={{
+      flex: 1, minHeight: 0,
       background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: 12,
-      overflow: "auto", maxHeight: "68vh",
+      overflow: "hidden",
     }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8, justifyContent: "flex-end" }}>
-        <button onClick={() => setScale((s) => Math.min(2, s * 1.25))} style={zoomBtnStyle}>＋</button>
-        <button onClick={() => setScale((s) => Math.max(0.1, s / 1.25))} style={zoomBtnStyle}>－</button>
-      </div>
-      <svg width={W * scale} height={H * scale} viewBox={`0 0 ${W} ${H}`} style={{ display: "block" }}>
+      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
         {subBoxes.map((b) => {
           const stat = countDone(statuses, b.key, PLANT[b.key].t, activeLayer);
           const pct = stat.total ? stat.done / stat.total : 0;
@@ -656,8 +625,9 @@ export default function App() {
 
   return (
     <div style={{
-      minHeight: "100vh", background: P.bg, color: P.text,
-      fontFamily: "'IBM Plex Sans','Segoe UI',sans-serif", padding: "24px 16px",
+      height: "100vh", background: P.bg, color: P.text,
+      fontFamily: "'IBM Plex Sans','Segoe UI',sans-serif", padding: "12px 16px",
+      display: "flex", flexDirection: "column", overflow: "hidden",
     }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap');
@@ -667,31 +637,29 @@ export default function App() {
         ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:${P.surface}}::-webkit-scrollbar-thumb{background:${P.border};border-radius:4px}
         select, input, button { font-family: inherit; }
         button:hover { filter: brightness(1.12); }
+        html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
       `}</style>
 
-      <div style={{ maxWidth: 1180, margin: "0 auto" }}>
-        <div style={{ marginBottom: 18 }}>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+        <div style={{ marginBottom: 8, flexShrink: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <div style={{ display: "inline-flex", alignItems: "center", background: P.accentG,
-              border: `1px solid ${P.accent}33`, borderRadius: 6, padding: "4px 14px", marginBottom: 10 }}>
+              border: `1px solid ${P.accent}33`, borderRadius: 6, padding: "3px 12px" }}>
               <span style={{ color: P.accent, fontSize: 11, fontFamily: "monospace", letterSpacing: 1 }}>UFV SDM · STATUS DE CAMPO</span>
             </div>
             <SyncBadge state={syncState} />
+            <h1 style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5, margin: 0,
+              background: `linear-gradient(135deg,${P.text},${P.accent})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+              Dashboard de Lavagem, Roçagem &amp; Acesso
+            </h1>
           </div>
-          <h1 style={{ fontSize: 24, fontWeight: 700, letterSpacing: -0.5, margin: 0,
-            background: `linear-gradient(135deg,${P.text},${P.accent})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-            Dashboard de Lavagem, Roçagem &amp; Acesso
-          </h1>
-          <p style={{ color: P.muted, fontSize: 13, marginTop: 6 }}>
-            Posições reais dos trackers (1–132) por subcampo SDM 3.x / SDM 4.x. Clique para marcar status; shift+clique pinta um intervalo.
-          </p>
         </div>
 
         {!loaded ? (
           <div style={{ color: P.muted, fontSize: 13 }}>Carregando status salvo...</div>
         ) : view === "overview" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
               <LayerTabs active={activeLayer} onChange={setActiveLayer} />
               <div style={{ flex: 1, minWidth: 160 }}>
                 <ProgressBar done={globalStat.done} prog={globalStat.prog} total={globalStat.total} color={STATE_COLORS[activeLayer][2]} />
@@ -702,12 +670,13 @@ export default function App() {
             </div>
             <Legend activeLayer={activeLayer} />
             <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} />
-            <OverviewCards statuses={statuses} activeLayer={activeLayer} onSelect={setView} />
           </div>
         ) : (
-          <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatuses}
-            activeLayer={activeLayer} setActiveLayer={setActiveLayer}
-            onNavigate={(key) => setView(key || "overview")} />
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatuses}
+              activeLayer={activeLayer} setActiveLayer={setActiveLayer}
+              onNavigate={(key) => setView(key || "overview")} />
+          </div>
         )}
       </div>
     </div>
