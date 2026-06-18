@@ -554,6 +554,12 @@ export default function App() {
   const [syncState, setSyncState] = useState("loading"); // loading | ok | saving | error | offline
   const saveTimer = useRef(null);
   const skipNextRealtime = useRef(false);
+  const userDirty = useRef(false);
+
+  const setStatusesByUser = useCallback((updater) => {
+    userDirty.current = true;
+    setStatuses(updater);
+  }, []);
 
   useEffect(() => {
     let channel;
@@ -585,6 +591,7 @@ export default function App() {
           { event: "*", schema: "public", table: "tracker_status", filter: `id=eq.${STORAGE_ROW_ID}` },
           (payload) => {
             if (skipNextRealtime.current) { skipNextRealtime.current = false; return; }
+            if (userDirty.current) return;
             if (payload.new && payload.new.value) setStatuses(payload.new.value);
           }
         )
@@ -594,9 +601,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!loaded || !supabase) return;
+    if (!loaded || !supabase || !userDirty.current) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async () => {
+      userDirty.current = false;
       setSyncState("saving");
       try {
         skipNextRealtime.current = true;
@@ -606,10 +614,11 @@ export default function App() {
         if (error) throw error;
         setSyncState("ok");
       } catch (e) {
+        userDirty.current = true;
         console.error("Erro ao salvar no Supabase:", e);
         setSyncState("error");
       }
-    }, 500);
+    }, 800);
   }, [statuses, loaded]);
 
   const globalStat = useMemo(() => {
@@ -673,7 +682,7 @@ export default function App() {
           </div>
         ) : (
           <div style={{ flex: 1, minHeight: 0 }}>
-            <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatuses}
+            <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatusesByUser}
               activeLayer={activeLayer} setActiveLayer={setActiveLayer}
               onNavigate={(key) => setView(key || "overview")} />
           </div>
