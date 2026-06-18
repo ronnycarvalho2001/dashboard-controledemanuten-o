@@ -81,9 +81,10 @@ function useSubGeometry(key) {
     }).sort((a, b) => (Number(a.g) || 0) - (Number(b.g) || 0));
 
     const pad = Math.max(col, row * 0.18);
+    const padTop = Math.max(col, row * 0.55);
     return {
       trackers, cmd, minX, maxX, minY, maxY,
-      W: maxX - minX + pad * 2, H: maxY - minY + pad * 2, pad,
+      W: maxX - minX + pad * 2, H: maxY - minY + pad + padTop, pad, padTop,
       col, row, groups,
     };
   }, [key]);
@@ -182,11 +183,11 @@ function Legend({ activeLayer }) {
    MAPA SVG DE UM SUBCAMPO
    ════════════════════════════════════════════════════════════════════════ */
 function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, selected, onClick, scale }) {
-  const { trackers, cmd, minX, maxY, W, H, pad, col, row, groups } = geo;
+  const { trackers, cmd, minX, maxY, W, H, pad, padTop, col, row, groups } = geo;
   const markerW = col * 0.82, markerH = row * 0.5;
   const idx = LAYER_IDX[activeLayer];
   const toX = (x) => x - minX + pad;
-  const toY = (y) => maxY - y + pad;
+  const toY = (y) => maxY - y + padTop;
 
   const vW = W / scale, vH = H / scale;
   const vX = (W - vW) / 2, vY = (H - vH) / 2;
