@@ -14,8 +14,8 @@ const SUB_KEYS = Object.keys(PLANT).sort((a, b) => {
 });
 
 const LAYERS = [
-  { key: "lavagem", label: "Lavagem", icon: "💧", states: ["Pendente", "Em andamento", "Concluída"] },
-  { key: "rocagem", label: "Roçagem", icon: "🌾", states: ["Pendente", "Em andamento", "Concluída"] },
+  { key: "lavagem", label: "Lavagem", icon: "💧", states: ["Pendente", "Incompleto", "Concluída"] },
+  { key: "rocagem", label: "Roçagem", icon: "🌾", states: ["Pendente", "Incompleto", "Concluída"] },
   { key: "trator", label: "Acesso trator", icon: "🚜", states: ["Não avaliado", "Bloqueado", "Liberado"] },
 ];
 const LAYER_IDX = { lavagem: 0, rocagem: 1, trator: 2 };
@@ -106,25 +106,13 @@ function countDone(statuses, subKey, trackers, layerKey) {
    COMPONENTES PEQUENOS
    ════════════════════════════════════════════════════════════════════════ */
 function SyncBadge({ state }) {
-  const map = {
-    loading: { c: P.muted, label: "Conectando...", dot: P.muted },
-    ok: { c: P.accent, label: "Sincronizado", dot: P.accent },
-    saving: { c: P.info, label: "Salvando...", dot: P.info },
-    error: { c: P.danger, label: "Erro ao sincronizar", dot: P.danger },
-    offline: { c: P.warn, label: "Sem Supabase configurado (não salva)", dot: P.warn },
-  };
-  const s = map[state] || map.loading;
+  const color = { loading: P.muted, ok: P.accent, saving: P.info, error: P.danger, offline: P.warn }[state] || P.muted;
   return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 6, background: s.c + "14",
-      border: `1px solid ${s.c}44`, borderRadius: 6, padding: "4px 10px", marginBottom: 10,
-    }}>
-      <div style={{
-        width: 6, height: 6, borderRadius: "50%", background: s.dot,
+    <div title={{ loading: "Conectando...", ok: "Sincronizado", saving: "Salvando...", error: "Erro ao sincronizar", offline: "Sem Supabase" }[state]}
+      style={{
+        width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0,
         animation: state === "saving" || state === "loading" ? "pulse 1s ease-in-out infinite" : "none",
       }} />
-      <span style={{ color: s.c, fontSize: 11, fontFamily: "monospace" }}>{s.label}</span>
-    </div>
   );
 }
 
@@ -381,9 +369,9 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         <div style={{ flex: 1, minWidth: 160 }}>
           <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[2]} />
         </div>
-        <span style={{ fontFamily: "monospace", fontSize: 12.5, color: colors[2], fontWeight: 700 }}>
-          {stat.done}/{stat.total} ({Math.round((stat.done / stat.total) * 100)}%)
-        </span>
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: colors[2], fontWeight: 700 }}>✓ {stat.done}</span>
+        {stat.prog > 0 && <span style={{ fontFamily: "monospace", fontSize: 12, color: P.warn, fontWeight: 700 }}>½ {stat.prog}</span>}
+        <span style={{ fontFamily: "monospace", fontSize: 12, color: P.muted }}>/{stat.total}</span>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, flexShrink: 0 }}>
@@ -457,6 +445,21 @@ const zoomBtnStyle = {
    VISÃO GERAL — mapa geral de toda a usina, posições reais
    ════════════════════════════════════════════════════════════════════════ */
 function OverviewMap({ statuses, activeLayer, onSelect }) {
+  const containerRef = useRef(null);
+  const [zoom, setZoom] = useState(1);
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    setZoom((z) => Math.max(1, Math.min(10, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
+  }, []);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
+
   const { all, minX, maxX, minY, maxY } = useMemo(() => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     const all = [];
@@ -483,13 +486,16 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
     return { key, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
   }), []);
 
+  const vW = W / zoom, vH = H / zoom;
+  const vX = (W - vW) / 2, vY = (H - vH) / 2;
+
   return (
-    <div style={{
+    <div ref={containerRef} style={{
       flex: 1, minHeight: 0,
       background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: 12,
-      overflow: "hidden",
+      overflow: "hidden", cursor: zoom > 1 ? "move" : "default",
     }}>
-      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
+      <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
         {subBoxes.map((b) => {
           const stat = countDone(statuses, b.key, PLANT[b.key].t, activeLayer);
           const pct = stat.total ? stat.done / stat.total : 0;
@@ -651,16 +657,10 @@ export default function App() {
 
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
         <div style={{ marginBottom: 8, flexShrink: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <div style={{ display: "inline-flex", alignItems: "center", background: P.accentG,
-              border: `1px solid ${P.accent}33`, borderRadius: 6, padding: "3px 12px" }}>
-              <span style={{ color: P.accent, fontSize: 11, fontFamily: "monospace", letterSpacing: 1 }}>UFV SDM · STATUS DE CAMPO</span>
-            </div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: P.accentG,
+            border: `1px solid ${P.accent}33`, borderRadius: 6, padding: "4px 14px" }}>
+            <span style={{ color: P.accent, fontSize: 11, fontFamily: "monospace", letterSpacing: 1 }}>UFV SDM · STATUS DE CAMPO</span>
             <SyncBadge state={syncState} />
-            <h1 style={{ fontSize: 18, fontWeight: 700, letterSpacing: -0.5, margin: 0,
-              background: `linear-gradient(135deg,${P.text},${P.accent})`, WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-              Dashboard de Lavagem, Roçagem &amp; Acesso
-            </h1>
           </div>
         </div>
 
@@ -673,8 +673,16 @@ export default function App() {
               <div style={{ flex: 1, minWidth: 160 }}>
                 <ProgressBar done={globalStat.done} prog={globalStat.prog} total={globalStat.total} color={STATE_COLORS[activeLayer][2]} />
               </div>
-              <span style={{ fontFamily: "monospace", fontSize: 13, color: STATE_COLORS[activeLayer][2], fontWeight: 700 }}>
-                {globalStat.done}/{globalStat.total} ({Math.round((globalStat.done / globalStat.total) * 100)}%) na usina
+              <span style={{ fontFamily: "monospace", fontSize: 12, color: STATE_COLORS[activeLayer][2], fontWeight: 700 }}>
+                ✓ {globalStat.done}
+              </span>
+              {globalStat.prog > 0 && (
+                <span style={{ fontFamily: "monospace", fontSize: 12, color: P.warn, fontWeight: 700 }}>
+                  ½ {globalStat.prog}
+                </span>
+              )}
+              <span style={{ fontFamily: "monospace", fontSize: 12, color: P.muted }}>
+                /{globalStat.total} trackers
               </span>
             </div>
             <Legend activeLayer={activeLayer} />
