@@ -448,18 +448,8 @@ const zoomBtnStyle = {
 function OverviewMap({ statuses, activeLayer, onSelect }) {
   const containerRef = useRef(null);
   const [zoom, setZoom] = useState(1);
-
-  const handleWheel = useCallback((e) => {
-    e.preventDefault();
-    setZoom((z) => Math.max(1, Math.min(10, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15))));
-  }, []);
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef(null);
 
   const { all, minX, maxX, minY, maxY } = useMemo(() => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
@@ -487,14 +477,76 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
     return { key, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
   }), []);
 
+  const clampOffset = useCallback((ox, oy, z) => {
+    const vW = W / z, vH = H / z;
+    const maxOx = (W - vW) / 2, maxOy = (H - vH) / 2;
+    return { x: Math.max(-maxOx, Math.min(maxOx, ox)), y: Math.max(-maxOy, Math.min(maxOy, oy)) };
+  }, [W, H]);
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width;
+    const my = (e.clientY - rect.top) / rect.height;
+    setZoom((z) => {
+      const newZ = Math.max(1, Math.min(10, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
+      const vW = W / z, vH = H / z;
+      const nvW = W / newZ, nvH = H / newZ;
+      setOffset((o) => clampOffset(
+        o.x + (nvW - vW) * (0.5 - mx),
+        o.y + (nvH - vH) * (0.5 - my),
+        newZ,
+      ));
+      return newZ;
+    });
+  }, [W, H, clampOffset]);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [handleWheel]);
+
+  const handleMouseDown = useCallback((e) => {
+    if (zoom <= 1) return;
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startY: e.clientY, ox: offset.x, oy: offset.y };
+  }, [zoom, offset]);
+
+  const handleMouseMove = useCallback((e) => {
+    if (!dragRef.current) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const vW = W / zoom, vH = H / zoom;
+    const dx = (e.clientX - dragRef.current.startX) / rect.width * vW;
+    const dy = (e.clientY - dragRef.current.startY) / rect.height * vH;
+    setOffset(clampOffset(dragRef.current.ox - dx, dragRef.current.oy - dy, zoom));
+  }, [zoom, W, H, clampOffset]);
+
+  const handleMouseUp = useCallback(() => { dragRef.current = null; }, []);
+
+  useEffect(() => {
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
   const vW = W / zoom, vH = H / zoom;
-  const vX = (W - vW) / 2, vY = (H - vH) / 2;
+  const vX = (W - vW) / 2 + offset.x, vY = (H - vH) / 2 + offset.y;
 
   return (
-    <div ref={containerRef} style={{
+    <div ref={containerRef} onMouseDown={handleMouseDown} style={{
       flex: 1, minHeight: 0,
       background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: 12,
-      overflow: "hidden", cursor: zoom > 1 ? "move" : "default",
+      overflow: "hidden", cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default",
+      userSelect: "none",
     }}>
       <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
         {subBoxes.map((b) => {
