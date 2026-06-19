@@ -16,7 +16,7 @@ const SUB_KEYS = Object.keys(PLANT).sort((a, b) => {
 
 const LAYERS = [
   { key: "lavagem", label: "Lavagem", icon: "💧",
-    states: ["🔴 NÃO LAVADO", "⚫ PENDENTE 22 MÓDULOS", "🔵 PENDENTE 8 MÓDULOS", "🟡 LAVADO PARCIAL 50%", "✅ LAVADO 100%"],
+    states: ["NÃO LAVADO", "PENDENTE 22 MÓDULOS", "PENDENTE 8 MÓDULOS", "LAVADO PARCIAL 50%", "LAVADO 100%"],
     doneIdx: 4, progIdxes: [2, 3] },
   { key: "rocagem", label: "Roçagem", icon: "🌾",
     states: ["Pendente", "Incompleto", "Concluída"],
