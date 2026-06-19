@@ -43,6 +43,18 @@ const STATE_COLORS = {
 
 const GROUP_PALETTE = ["#4da6ff", "#c084fc", "#ffb347", "#00e5a0", "#ff5f7e", "#7dd3fc", "#fb923c", "#a3e635", "#f472b6", "#94a3b8"];
 
+// Fração de módulos lavados por estado (lavagem tem 112 módulos/tracker)
+const LAYER_PCT = {
+  lavagem: [0, (112 - 22) / 112, (112 - 8) / 112, 0.5, 1],
+  rocagem: [0, 0.5, 1],
+  trator: [0, 0, 1],
+};
+function heatColor(pct) {
+  const p = Math.max(0, Math.min(1, pct));
+  if (p < 0.5) return `rgb(220,${Math.round(p * 2 * 190)},30)`;
+  return `rgb(${Math.round((1 - p) * 2 * 220)},195,30)`;
+}
+
 function pad3(n) { return String(n).padStart(3, "0"); }
 function trackerId(key, n) {
   const [a, b] = key.split(".");
@@ -353,6 +365,17 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const colors = STATE_COLORS[activeLayer];
   const selStatus = selected != null ? getStatus(statuses, subKey, selected) : null;
 
+  const layer = LAYERS.find((l) => l.key === activeLayer);
+  const stateCounts = useMemo(() => {
+    const idx = LAYER_IDX[activeLayer];
+    const counts = new Array(layer.states.length).fill(0);
+    geo.trackers.forEach(([n]) => {
+      const v = getStatus(statuses, subKey, n)[idx];
+      if (v >= 0 && v < counts.length) counts[v]++;
+    });
+    return counts;
+  }, [geo.trackers, statuses, subKey, activeLayer, layer.states.length]);
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0 }}>
@@ -402,6 +425,22 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </div>
 
         <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
+            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>CLASSIFICAÇÃO — {layer.label.toUpperCase()}</div>
+            {layer.states.map((s, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <div style={{ width: 11, height: 11, borderRadius: 3, background: STATE_COLORS[activeLayer][i], flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 11.5, color: P.muted, fontFamily: "monospace" }}>{s}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: stateCounts[i] > 0 ? P.text : P.border, fontFamily: "monospace", minWidth: 28, textAlign: "right" }}>
+                  {stateCounts[i]}
+                </span>
+                <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "monospace", width: 34, textAlign: "right" }}>
+                  {geo.trackers.length > 0 ? Math.round(stateCounts[i] / geo.trackers.length * 100) + "%" : "—"}
+                </span>
+              </div>
+            ))}
+          </div>
+
           <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
             <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
             {selected != null ? (
@@ -454,6 +493,7 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
   const containerRef = useRef(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [heatmap, setHeatmap] = useState(false);
   const dragRef = useRef(null);
 
   const { all, minX, maxX, minY, maxY } = useMemo(() => {
@@ -548,31 +588,51 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
 
   return (
     <div ref={containerRef} onMouseDown={handleMouseDown} style={{
-      flex: 1, minHeight: 0,
+      flex: 1, minHeight: 0, position: "relative",
       background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: 12,
       overflow: "hidden", cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default",
       userSelect: "none",
     }}>
+      <button onClick={() => setHeatmap((h) => !h)} style={{
+        position: "absolute", top: 10, right: 10, zIndex: 2,
+        background: heatmap ? P.accentG : P.card, border: `1px solid ${heatmap ? P.accent : P.border}`,
+        color: heatmap ? P.accent : P.muted, borderRadius: 7, padding: "5px 11px",
+        fontSize: 11.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
+      }}>
+        {heatmap ? "◉ Heatmap" : "○ Heatmap"}
+      </button>
       <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
         {subBoxes.map((b) => {
-          const stat = countDone(statuses, b.key, PLANT[b.key].t, activeLayer);
+          const trackers = PLANT[b.key].t;
+          const stat = countDone(statuses, b.key, trackers, activeLayer);
           const pct = stat.total ? stat.done / stat.total : 0;
+          const avgHeat = heatmap
+            ? trackers.reduce((s, [n]) => {
+                const v = getStatus(statuses, b.key, n)[idx];
+                return s + (LAYER_PCT[activeLayer]?.[v] ?? 0);
+              }, 0) / (trackers.length || 1)
+            : 0;
           const bx = toX(b.minX) - 14, by = toY(b.maxY) - 14;
           const bw = (b.maxX - b.minX) + 28, bh = (b.maxY - b.minY) + 28;
+          const labelColor = heatmap ? heatColor(avgHeat) : (pct === 1 ? P.accent : P.muted);
           return (
             <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
               <rect x={bx} y={by} width={bw} height={bh} rx={10}
-                fill={P.card} stroke={pct === 1 ? P.accent : P.border} strokeWidth={2} opacity={0.9} />
+                fill={P.card} stroke={heatmap ? heatColor(avgHeat) : (pct === 1 ? P.accent : P.border)} strokeWidth={2} opacity={0.9} />
               <rect x={bx} y={by - 38} width={bw} height={34} rx={8}
-                fill={P.bg} stroke={pct === 1 ? P.accent : P.border} strokeWidth={1.5} opacity={0.95} />
+                fill={P.bg} stroke={heatmap ? heatColor(avgHeat) : (pct === 1 ? P.accent : P.border)} strokeWidth={1.5} opacity={0.95} />
               <text x={bx + 10} y={by - 22} fontSize={14} fill={P.text} fontFamily="monospace" fontWeight="700">SDM {b.key}</text>
-              <text x={bx + 10} y={by - 8} fontSize={11} fill={pct === 1 ? P.accent : P.muted} fontFamily="monospace">{stat.done}/{stat.total} · {Math.round(pct * 100)}%</text>
+              <text x={bx + 10} y={by - 8} fontSize={11} fill={labelColor} fontFamily="monospace">
+                {heatmap ? `${Math.round(avgHeat * 100)}% módulos` : `${stat.done}/${stat.total} · ${Math.round(pct * 100)}%`}
+              </text>
             </g>
           );
         })}
         {all.map((p) => {
           const val = getStatus(statuses, p.key, p.n)[idx];
-          const color = STATE_COLORS[activeLayer][val];
+          const color = heatmap
+            ? heatColor(LAYER_PCT[activeLayer]?.[val] ?? 0)
+            : STATE_COLORS[activeLayer][val];
           return (
             <rect key={p.key + "-" + p.n}
               x={toX(p.x) - markerW / 2} y={toY(p.y) - markerH / 2}
