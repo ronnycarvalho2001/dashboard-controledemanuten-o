@@ -606,38 +606,53 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
           const trackers = PLANT[b.key].t;
           const stat = countDone(statuses, b.key, trackers, activeLayer);
           const pct = stat.total ? stat.done / stat.total : 0;
-          const avgHeat = heatmap
-            ? trackers.reduce((s, [n]) => {
-                const v = getStatus(statuses, b.key, n)[idx];
-                return s + (LAYER_PCT[activeLayer]?.[v] ?? 0);
-              }, 0) / (trackers.length || 1)
-            : 0;
           const bx = toX(b.minX) - 14, by = toY(b.maxY) - 14;
           const bw = (b.maxX - b.minX) + 28, bh = (b.maxY - b.minY) + 28;
-          const labelColor = heatmap ? heatColor(avgHeat) : (pct === 1 ? P.accent : P.muted);
+
+          if (heatmap) {
+            const avgHeat = trackers.reduce((s, [n]) => {
+              const v = getStatus(statuses, b.key, n)[idx];
+              return s + (LAYER_PCT[activeLayer]?.[v] ?? 0);
+            }, 0) / (trackers.length || 1);
+            const cx = bx + bw / 2, cy = by + bh / 2;
+            const fName = bh * 0.09, fPct = bh * 0.22;
+            const sw = bh * 0.007;
+            return (
+              <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
+                <rect x={bx} y={by} width={bw} height={bh} rx={10} fill={heatColor(avgHeat)} />
+                <rect x={bx} y={by} width={bw} height={bh} rx={10} fill="rgba(0,0,0,0.18)" />
+                <text x={cx} y={cy - fPct * 0.55} fontSize={fPct} fill="#fff" fontFamily="monospace"
+                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.45)" strokeWidth={sw * 2.5} paintOrder="stroke">
+                  {Math.round(avgHeat * 100)}%
+                </text>
+                <text x={cx} y={cy + fPct * 0.52} fontSize={fName} fill="rgba(255,255,255,0.85)" fontFamily="monospace"
+                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.45)" strokeWidth={sw} paintOrder="stroke">
+                  SDM {b.key}
+                </text>
+              </g>
+            );
+          }
+
           return (
             <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
               <rect x={bx} y={by} width={bw} height={bh} rx={10}
-                fill={P.card} stroke={heatmap ? heatColor(avgHeat) : (pct === 1 ? P.accent : P.border)} strokeWidth={2} opacity={0.9} />
+                fill={P.card} stroke={pct === 1 ? P.accent : P.border} strokeWidth={2} opacity={0.9} />
               <rect x={bx} y={by - 38} width={bw} height={34} rx={8}
-                fill={P.bg} stroke={heatmap ? heatColor(avgHeat) : (pct === 1 ? P.accent : P.border)} strokeWidth={1.5} opacity={0.95} />
+                fill={P.bg} stroke={pct === 1 ? P.accent : P.border} strokeWidth={1.5} opacity={0.95} />
               <text x={bx + 10} y={by - 22} fontSize={14} fill={P.text} fontFamily="monospace" fontWeight="700">SDM {b.key}</text>
-              <text x={bx + 10} y={by - 8} fontSize={11} fill={labelColor} fontFamily="monospace">
-                {heatmap ? `${Math.round(avgHeat * 100)}% módulos` : `${stat.done}/${stat.total} · ${Math.round(pct * 100)}%`}
-              </text>
+              <text x={bx + 10} y={by - 8} fontSize={11} fill={pct === 1 ? P.accent : P.muted} fontFamily="monospace">{stat.done}/{stat.total} · {Math.round(pct * 100)}%</text>
             </g>
           );
         })}
-        {all.map((p) => {
+        {!heatmap && all.map((p) => {
           const val = getStatus(statuses, p.key, p.n)[idx];
-          const color = heatmap
-            ? heatColor(LAYER_PCT[activeLayer]?.[val] ?? 0)
-            : STATE_COLORS[activeLayer][val];
           return (
             <rect key={p.key + "-" + p.n}
               x={toX(p.x) - markerW / 2} y={toY(p.y) - markerH / 2}
               width={markerW} height={markerH} rx={2}
-              fill={color} opacity={0.95} style={{ pointerEvents: "none" }} />
+              fill={STATE_COLORS[activeLayer][val]} opacity={0.95} style={{ pointerEvents: "none" }} />
           );
         })}
       </svg>
