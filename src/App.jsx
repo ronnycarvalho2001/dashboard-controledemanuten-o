@@ -594,13 +594,33 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
       userSelect: "none",
     }}>
       <button onClick={() => setHeatmap((h) => !h)} style={{
-        position: "absolute", top: 10, right: 10, zIndex: 2,
+        position: "absolute", top: 10, left: 10, zIndex: 2,
         background: heatmap ? P.accentG : P.card, border: `1px solid ${heatmap ? P.accent : P.border}`,
         color: heatmap ? P.accent : P.muted, borderRadius: 7, padding: "5px 11px",
         fontSize: 11.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
       }}>
         {heatmap ? "◉ Heatmap" : "○ Heatmap"}
       </button>
+      {heatmap && (
+        <div style={{
+          position: "absolute", top: 10, right: 10, zIndex: 2,
+          background: "rgba(13,15,20,0.9)", border: `1px solid ${P.border}`,
+          borderRadius: 8, padding: "8px 10px",
+        }}>
+          <div style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>LEGENDA:</div>
+          <div style={{ display: "flex", gap: 7, alignItems: "stretch" }}>
+            <div style={{
+              width: 12, height: 100, borderRadius: 3, flexShrink: 0,
+              background: "linear-gradient(to bottom,rgb(0,195,30),rgb(110,195,30),rgb(220,190,30),rgb(220,95,30),rgb(220,0,30))",
+            }} />
+            <div style={{ display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
+              {["100%", "75%", "50%", "25%", "0%"].map((l) => (
+                <span key={l} style={{ fontSize: 10, color: P.text, fontFamily: "monospace", lineHeight: 1 }}>{l}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
       <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
         {subBoxes.map((b) => {
           const trackers = PLANT[b.key].t;
@@ -615,21 +635,21 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
               return s + (LAYER_PCT[activeLayer]?.[v] ?? 0);
             }, 0) / (trackers.length || 1);
             const cx = bx + bw / 2, cy = by + bh / 2;
-            const fName = bh * 0.09, fPct = bh * 0.22;
-            const sw = bh * 0.007;
+            const fPct = Math.min(bh * 0.14, bw * 0.22);
+            const fName = fPct * 0.55;
+            const sw = fPct * 0.04;
             return (
               <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
                 <rect x={bx} y={by} width={bw} height={bh} rx={10} fill={heatColor(avgHeat)} />
-                <rect x={bx} y={by} width={bw} height={bh} rx={10} fill="rgba(0,0,0,0.18)" />
-                <text x={cx} y={cy - fPct * 0.55} fontSize={fPct} fill="#fff" fontFamily="monospace"
-                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
-                  stroke="rgba(0,0,0,0.45)" strokeWidth={sw * 2.5} paintOrder="stroke">
-                  {Math.round(avgHeat * 100)}%
-                </text>
-                <text x={cx} y={cy + fPct * 0.52} fontSize={fName} fill="rgba(255,255,255,0.85)" fontFamily="monospace"
-                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
-                  stroke="rgba(0,0,0,0.45)" strokeWidth={sw} paintOrder="stroke">
+                <text x={cx} y={cy - fPct * 0.2} fontSize={fName} fill="#fff" fontFamily="monospace"
+                  fontWeight="600" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.5)" strokeWidth={sw} paintOrder="stroke">
                   SDM {b.key}
+                </text>
+                <text x={cx} y={cy + fPct * 0.55} fontSize={fPct} fill="#fff" fontFamily="monospace"
+                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.5)" strokeWidth={sw * 1.5} paintOrder="stroke">
+                  {Math.round(avgHeat * 100)}%
                 </text>
               </g>
             );
