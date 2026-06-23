@@ -882,10 +882,10 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     const focoQty = isFocos ? getFocoQty(statuses, key, focoType, focoCycle, focoVisit) : 0;
     const focoTotal = isFocos ? getFocoTotalAll(statuses, key, focoCycle, focoVisit) : 0;
 
-    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoQty, focoTotal };
+    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoQty };
   });
 
-  const focoMax = isFocos ? Math.max(1, ...boxData.map((d) => d.focoTotal)) : 1;
+  const focoMax = isFocos ? Math.max(1, ...boxData.map((d) => d.focoQty)) : 1;
 
   const fPct = heatmap
     ? boxData.reduce((m, { bw, bh }) => Math.min(m, bh * 0.28, bw * 0.30), Infinity)
@@ -908,14 +908,14 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     >
       {isFocos ? (
         <>
-          {boxData.map(({ key, hullStr, focoTotal, cx, cy, bw, bh }) => {
-            const color = focoQtyColor(focoTotal, focoMax);
+          {boxData.map(({ key, hullStr, focoQty, cx, cy, bw, bh }) => {
+            const color = focoQtyColor(focoQty, focoMax);
             return (
             <g key={key}>
               <polygon points={hullStr}
-                fill={focoTotal > 0 ? color : "rgba(16,23,41,0.72)"}
-                opacity={focoTotal > 0 ? 0.75 : 0.72}
-                stroke={focoTotal > 0 ? color : P.border} strokeWidth={2}
+                fill={focoQty > 0 ? color : "rgba(16,23,41,0.72)"}
+                opacity={focoQty > 0 ? 0.75 : 0.72}
+                stroke={focoQty > 0 ? color : P.border} strokeWidth={2}
                 style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
               {bw > 24 && bh > 18 && (
                 <text x={cx} y={cy - fName * 0.3} fontSize={fName} fill="#fff" fontFamily="monospace"
@@ -928,7 +928,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
                 <text x={cx} y={cy + fName * 0.55} fontSize={fPct} fill="#fff" fontFamily="monospace"
                   fontWeight="700" textAnchor="middle" dominantBaseline="middle"
                   stroke="rgba(0,0,0,0.7)" strokeWidth={sw * 1.2} paintOrder="stroke">
-                  {focoTotal}
+                  {focoQty}
                 </text>
               )}
             </g>
