@@ -838,7 +838,7 @@ function OverviewCards({ statuses, activeLayer, onSelect }) {
 const STORAGE_ROW_ID = "sdm_tracker_status_v1";
 
 export default function App() {
-  const readOnly = new URLSearchParams(window.location.search).has("view");
+  const readOnly = new URLSearchParams(window.location.search).get("key") !== "sdm2025@admin";
   const [view, setView] = useState("overview");
   const [activeLayer, setActiveLayerRaw] = useState("lavagem");
   const [heatmap, setHeatmap] = useState(false);
