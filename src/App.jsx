@@ -491,20 +491,23 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
     setLastClicked({ subKey, n });
   }, [statuses, subKey, activeLayer, lastClicked, applyToTrackers]);
 
-  const stat = countDone(statuses, subKey, geo.trackers, activeLayer);
-  const colors = STATE_COLORS[activeLayer];
+  const isFocos = activeLayer === "pragas_focos";
+  const safeLayer = isFocos ? "pragas_c1" : activeLayer;
+  const stat = isFocos ? { done: 0, prog: 0, total: 0, pending: 0 } : countDone(statuses, subKey, geo.trackers, safeLayer);
+  const colors = STATE_COLORS[safeLayer];
   const selStatus = selected != null ? getStatus(statuses, subKey, selected) : null;
 
-  const layer = LAYERS.find((l) => l.key === activeLayer);
+  const layer = LAYERS.find((l) => l.key === safeLayer);
   const stateCounts = useMemo(() => {
-    const idx = LAYER_IDX[activeLayer];
+    if (isFocos) return [];
+    const idx = LAYER_IDX[safeLayer];
     const counts = new Array(layer.states.length).fill(0);
     geo.trackers.forEach(([n]) => {
       const v = getStatus(statuses, subKey, n)[idx];
       if (v >= 0 && v < counts.length) counts[v]++;
     });
     return counts;
-  }, [geo.trackers, statuses, subKey, activeLayer, layer.states.length]);
+  }, [geo.trackers, statuses, subKey, safeLayer, isFocos, layer.states.length]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
@@ -555,51 +558,81 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </div>
       </div>
 
-      {activeLayer === "pragas_focos" ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0, overflowY: "auto" }}>
-          {FOCO_TYPES.map((ft) => {
-            const focoData = (statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][ft.key]) || {};
-            const counts = FOCO_LEVELS.slice(1).map((_, i) => focoData[i + 1] || 0);
-            const total = counts.reduce((s, c) => s + c, 0);
-            const maxLevel = counts.reduce((m, c, i) => c > 0 ? i + 1 : m, 0);
-            return (
-              <div key={ft.key} style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: maxLevel > 0 ? FOCO_COLORS[maxLevel] : P.border }} />
-                  <span style={{ color: P.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>{ft.label}</span>
-                  <span style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginLeft: "auto" }}>Total: {total}</span>
+      {isFocos ? (
+        <div style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
+          <div style={{
+            flex: "2 1 420px", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12,
+            padding: 12, display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <svg width="100%" height="100%" viewBox={`0 0 ${geo.W} ${geo.H}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
+              {geo.groups.map((g) => {
+                const gx = (g.minX - geo.minX + geo.pad) - geo.col * 0.65;
+                const gy = (geo.maxY - g.maxY + geo.padTop) - geo.row * 0.75;
+                const gw = (g.maxX - g.minX) + geo.col * 1.3;
+                const gh = (g.maxY - g.minY) + geo.row * 1.5;
+                return (
+                  <rect key={g.g} x={gx} y={gy} width={gw} height={gh}
+                    fill="none" stroke={P.border} strokeOpacity={0.5}
+                    strokeDasharray="4 3" strokeWidth={Math.max(geo.W, geo.H) * 0.0014} rx={geo.row * 0.06} />
+                );
+              })}
+              {geo.trackers.map(([n, x, y]) => {
+                const cx = x - geo.minX + geo.pad;
+                const cy = geo.maxY - y + geo.padTop;
+                return (
+                  <rect key={n} x={cx - geo.col * 0.15} y={cy - geo.row * 0.15}
+                    width={geo.col * 0.3} height={geo.row * 0.3} rx={2}
+                    fill={P.border} opacity={0.3} />
+                );
+              })}
+            </svg>
+          </div>
+
+          <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+            {FOCO_TYPES.map((ft) => {
+              const focoData = (statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][ft.key]) || {};
+              const counts = FOCO_LEVELS.slice(1).map((_, i) => focoData[i + 1] || 0);
+              const total = counts.reduce((s, c) => s + c, 0);
+              const maxLevel = counts.reduce((m, c, i) => c > 0 ? i + 1 : m, 0);
+              return (
+                <div key={ft.key} style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: maxLevel > 0 ? FOCO_COLORS[maxLevel] : P.border }} />
+                    <span style={{ color: P.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>{ft.label}</span>
+                    <span style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginLeft: "auto" }}>Total: {total}</span>
+                  </div>
+                  {FOCO_LEVELS.slice(1).map((level, i) => {
+                    const lvl = i + 1;
+                    const val = focoData[lvl] || 0;
+                    return (
+                      <div key={lvl} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: FOCO_COLORS[lvl], flexShrink: 0 }} />
+                        <span style={{ flex: 1, fontSize: 12, color: P.muted, fontFamily: "monospace" }}>{level}</span>
+                        <input type="number" min={0} value={val} disabled={readOnly}
+                          onChange={(e) => {
+                            const v = Math.max(0, parseInt(e.target.value) || 0);
+                            setStatuses((prev) => {
+                              const focos = { ...(prev._focos || {}) };
+                              const sub = { ...(focos[subKey] || {}) };
+                              const ftData = { ...(sub[ft.key] || {}) };
+                              ftData[lvl] = v;
+                              sub[ft.key] = ftData;
+                              focos[subKey] = sub;
+                              return { ...prev, _focos: focos };
+                            });
+                          }}
+                          style={{
+                            width: 64, padding: "5px 8px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+                            background: P.bg, border: `1px solid ${P.border}`, color: val > 0 ? FOCO_COLORS[lvl] : P.muted,
+                            fontFamily: "monospace", textAlign: "center", outline: "none",
+                          }} />
+                      </div>
+                    );
+                  })}
                 </div>
-                {FOCO_LEVELS.slice(1).map((level, i) => {
-                  const lvl = i + 1;
-                  const val = focoData[lvl] || 0;
-                  return (
-                    <div key={lvl} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: FOCO_COLORS[lvl], flexShrink: 0 }} />
-                      <span style={{ flex: 1, fontSize: 12, color: P.muted, fontFamily: "monospace" }}>{level}</span>
-                      <input type="number" min={0} value={val} disabled={readOnly}
-                        onChange={(e) => {
-                          const v = Math.max(0, parseInt(e.target.value) || 0);
-                          setStatuses((prev) => {
-                            const focos = { ...(prev._focos || {}) };
-                            const sub = { ...(focos[subKey] || {}) };
-                            const ftData = { ...(sub[ft.key] || {}) };
-                            ftData[lvl] = v;
-                            sub[ft.key] = ftData;
-                            focos[subKey] = sub;
-                            return { ...prev, _focos: focos };
-                          });
-                        }}
-                        style={{
-                          width: 64, padding: "5px 8px", borderRadius: 8, fontSize: 13, fontWeight: 700,
-                          background: P.bg, border: `1px solid ${P.border}`, color: val > 0 ? FOCO_COLORS[lvl] : P.muted,
-                          fontFamily: "monospace", textAlign: "center", outline: "none",
-                        }} />
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       ) : (
         <>
