@@ -137,13 +137,16 @@ function useSubGeometry(key) {
 }
 
 /* ── status helpers ──────────────────────────────────────────────────── */
-function getFoco(statuses, subKey, focoType) {
-  return (statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][focoType]) || 0;
+function getFocoMaxLevel(statuses, subKey, focoType) {
+  const data = statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][focoType];
+  if (!data) return 0;
+  for (let lvl = 4; lvl >= 1; lvl--) { if ((data[lvl] || 0) > 0) return lvl; }
+  return 0;
 }
-function setFocoValue(statuses, subKey, focoType, level) {
-  const focos = { ...(statuses._focos || {}) };
-  focos[subKey] = { ...(focos[subKey] || {}), [focoType]: level };
-  return { ...statuses, _focos: focos };
+function getFocoTotal(statuses, subKey, focoType) {
+  const data = statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][focoType];
+  if (!data) return 0;
+  return [1, 2, 3, 4].reduce((s, lvl) => s + (data[lvl] || 0), 0);
 }
 function focoHeatColor(level) {
   if (level <= 0) return "transparent";
@@ -553,32 +556,50 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
       </div>
 
       {activeLayer === "pragas_focos" ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
-          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
-            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 12, letterSpacing: 0.5 }}>
-              NÍVEL DE FOCO — {focoType.toUpperCase()} — SDM {subKey}
-            </div>
-            {FOCO_LEVELS.map((level, i) => {
-              const currentLevel = getFoco(statuses, subKey, focoType);
-              const on = currentLevel === i;
-              return (
-                <button key={i} onClick={() => { if (!readOnly) setStatuses((prev) => setFocoValue(prev, subKey, focoType, i)); }}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px",
-                    marginBottom: 6, borderRadius: 10, cursor: readOnly ? "default" : "pointer",
-                    border: `1.5px solid ${on ? (FOCO_COLORS[i] || P.border) + "88" : P.border}`,
-                    background: on ? (FOCO_COLORS[i] || P.border) + "18" : "transparent",
-                    fontFamily: "inherit", fontSize: 13, fontWeight: on ? 700 : 500,
-                    color: on ? (i === 0 ? P.done : FOCO_COLORS[i]) : P.muted,
-                    transition: "all .12s",
-                  }}>
-                  {i > 0 && <div style={{ width: 10, height: 10, borderRadius: "50%", background: FOCO_COLORS[i], flexShrink: 0 }} />}
-                  {i === 0 && <div style={{ width: 10, height: 10, borderRadius: "50%", background: P.done, flexShrink: 0, opacity: 0.5 }} />}
-                  {level}
-                </button>
-              );
-            })}
-          </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0, overflowY: "auto" }}>
+          {FOCO_TYPES.map((ft) => {
+            const focoData = (statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][ft.key]) || {};
+            const counts = FOCO_LEVELS.slice(1).map((_, i) => focoData[i + 1] || 0);
+            const total = counts.reduce((s, c) => s + c, 0);
+            const maxLevel = counts.reduce((m, c, i) => c > 0 ? i + 1 : m, 0);
+            return (
+              <div key={ft.key} style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: "50%", background: maxLevel > 0 ? FOCO_COLORS[maxLevel] : P.border }} />
+                  <span style={{ color: P.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>{ft.label}</span>
+                  <span style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginLeft: "auto" }}>Total: {total}</span>
+                </div>
+                {FOCO_LEVELS.slice(1).map((level, i) => {
+                  const lvl = i + 1;
+                  const val = focoData[lvl] || 0;
+                  return (
+                    <div key={lvl} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: "50%", background: FOCO_COLORS[lvl], flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: 12, color: P.muted, fontFamily: "monospace" }}>{level}</span>
+                      <input type="number" min={0} value={val} disabled={readOnly}
+                        onChange={(e) => {
+                          const v = Math.max(0, parseInt(e.target.value) || 0);
+                          setStatuses((prev) => {
+                            const focos = { ...(prev._focos || {}) };
+                            const sub = { ...(focos[subKey] || {}) };
+                            const ftData = { ...(sub[ft.key] || {}) };
+                            ftData[lvl] = v;
+                            sub[ft.key] = ftData;
+                            focos[subKey] = sub;
+                            return { ...prev, _focos: focos };
+                          });
+                        }}
+                        style={{
+                          width: 64, padding: "5px 8px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+                          background: P.bg, border: `1px solid ${P.border}`, color: val > 0 ? FOCO_COLORS[lvl] : P.muted,
+                          fontFamily: "monospace", textAlign: "center", outline: "none",
+                        }} />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </div>
       ) : (
         <>
@@ -800,7 +821,8 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType }) {
       ? trackers.reduce((s, [n]) => s + (LAYER_PCT[realLayer]?.[getStatus(statuses, key, n)[idx]] ?? 0), 0) / (trackers.length || 1)
       : 0;
 
-    const focoLevel = isFocos ? getFoco(statuses, key, focoType) : 0;
+    const focoLevel = isFocos ? getFocoMaxLevel(statuses, key, focoType) : 0;
+    const focoTotal = isFocos ? getFocoTotal(statuses, key, focoType) : 0;
 
     return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoLevel };
   });
@@ -826,7 +848,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType }) {
     >
       {isFocos ? (
         <>
-          {boxData.map(({ key, hullStr, focoLevel, cx, cy, bw, bh }) => (
+          {boxData.map(({ key, hullStr, focoLevel, focoTotal, cx, cy, bw, bh }) => (
             <g key={key}>
               <polygon points={hullStr}
                 fill={focoLevel > 0 ? focoHeatColor(focoLevel) : "rgba(16,23,41,0.72)"}
@@ -834,18 +856,25 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType }) {
                 stroke={focoLevel > 0 ? focoHeatColor(focoLevel) : P.border} strokeWidth={2}
                 style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
               {bw > 24 && bh > 18 && (
-                <text x={cx} y={cy - 6} fontSize={fName} fill="#fff" fontFamily="monospace"
+                <text x={cx} y={cy - fName * 0.4} fontSize={fName} fill="#fff" fontFamily="monospace"
                   fontWeight="700" textAnchor="middle" dominantBaseline="middle"
                   stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
                   SDM {key}
                 </text>
               )}
-              {focoLevel > 0 && bw > 24 && (
-                <text x={cx} y={cy + fName * 0.7} fontSize={fName * 0.7} fill="#fff" fontFamily="monospace"
-                  fontWeight="600" textAnchor="middle" dominantBaseline="middle"
-                  stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
-                  {FOCO_LEVELS[focoLevel]}
-                </text>
+              {focoTotal > 0 && bw > 24 && (
+                <>
+                  <text x={cx} y={cy + fName * 0.5} fontSize={fName * 0.75} fill="#fff" fontFamily="monospace"
+                    fontWeight="600" textAnchor="middle" dominantBaseline="middle"
+                    stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
+                    {focoTotal} focos
+                  </text>
+                  <text x={cx} y={cy + fName * 1.2} fontSize={fName * 0.6} fill={focoHeatColor(focoLevel)} fontFamily="monospace"
+                    fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                    stroke="rgba(0,0,0,0.7)" strokeWidth={sw * 0.8} paintOrder="stroke">
+                    {FOCO_LEVELS[focoLevel]}
+                  </text>
+                </>
               )}
             </g>
           ))}
