@@ -837,8 +837,115 @@ function OverviewCards({ statuses, activeLayer, onSelect }) {
    ════════════════════════════════════════════════════════════════════════ */
 const STORAGE_ROW_ID = "sdm_tracker_status_v1";
 
+const ADMIN_PASS = "sdm2025@admin";
+
+function LoginScreen({ onLogin }) {
+  const [pass, setPass] = useState("");
+  const [error, setError] = useState(false);
+  const [exiting, setExiting] = useState(false);
+
+  const handleLogin = (mode) => {
+    if (mode === "admin") {
+      if (pass !== ADMIN_PASS) { setError(true); setTimeout(() => setError(false), 1200); return; }
+    }
+    setExiting(true);
+    setTimeout(() => onLogin(mode === "admin"), 700);
+  };
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 9999,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      opacity: exiting ? 0 : 1, transition: "opacity 0.7s ease",
+    }}>
+      <div style={{
+        position: "absolute", inset: 0,
+        backgroundImage: 'url("/WhatsApp Image 2026-06-23 at 10.44.57.jpeg")',
+        backgroundSize: "cover", backgroundPosition: "center",
+        filter: "brightness(0.45)",
+      }} />
+
+      <div style={{
+        position: "relative", zIndex: 1,
+        background: "rgba(11,15,30,0.82)", backdropFilter: "blur(24px)",
+        border: "1px solid rgba(245,210,0,0.18)", borderRadius: 20,
+        padding: "48px 44px 40px", width: 380, maxWidth: "90vw",
+        display: "flex", flexDirection: "column", alignItems: "center", gap: 28,
+        boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+        transform: exiting ? "scale(0.95) translateY(-20px)" : "scale(1)",
+        transition: "transform 0.7s ease, opacity 0.7s ease",
+      }}>
+        <img src="/logo-airbox.jpg" alt="Airbox" style={{ height: 48, borderRadius: 8 }} />
+
+        <div style={{ textAlign: "center" }}>
+          <div style={{ color: "#F5D200", fontSize: 18, fontWeight: 700, letterSpacing: 1, lineHeight: 1.3 }}>
+            UFV SDM — Serra do Mato
+          </div>
+          <div style={{ color: "#7b8bad", fontSize: 11, letterSpacing: 2, fontFamily: "monospace", marginTop: 4 }}>
+            CONTROLE DE MANUTENÇÃO
+          </div>
+        </div>
+
+        <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ position: "relative" }}>
+            <input
+              type="password" placeholder="Senha de acesso"
+              value={pass} onChange={(e) => setPass(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleLogin("admin")}
+              style={{
+                width: "100%", padding: "14px 16px", borderRadius: 12, fontSize: 14,
+                background: "rgba(16,23,41,0.9)", color: "#e8edf8",
+                border: `1.5px solid ${error ? "#ff5f7e" : "rgba(245,210,0,0.25)"}`,
+                outline: "none", fontFamily: "inherit",
+                transition: "border-color 0.3s",
+              }}
+            />
+            {error && (
+              <div style={{
+                position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)",
+                color: "#ff5f7e", fontSize: 12, fontWeight: 600, fontFamily: "monospace",
+                animation: "shake 0.4s ease",
+              }}>Senha incorreta</div>
+            )}
+          </div>
+
+          <button onClick={() => handleLogin("admin")} style={{
+            width: "100%", padding: "14px 0", borderRadius: 12, border: "none",
+            background: "linear-gradient(135deg, #F5D200, #C9AC00)", color: "#0b0f1e",
+            fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+            letterSpacing: 0.5, transition: "transform 0.15s, box-shadow 0.15s",
+          }}>
+            Entrar
+          </button>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ flex: 1, height: 1, background: "rgba(123,139,173,0.25)" }} />
+            <span style={{ color: "#7b8bad", fontSize: 11, fontFamily: "monospace" }}>ou</span>
+            <div style={{ flex: 1, height: 1, background: "rgba(123,139,173,0.25)" }} />
+          </div>
+
+          <button onClick={() => handleLogin("visitor")} style={{
+            width: "100%", padding: "12px 0", borderRadius: 12,
+            border: "1.5px solid rgba(77,166,255,0.35)", background: "rgba(77,166,255,0.08)",
+            color: "#4da6ff", fontSize: 13, fontWeight: 600, cursor: "pointer",
+            fontFamily: "inherit", letterSpacing: 0.3, transition: "background 0.15s",
+          }}>
+            Acessar como Visitante
+          </button>
+        </div>
+
+        <div style={{ color: "rgba(123,139,173,0.5)", fontSize: 9, fontFamily: "monospace", letterSpacing: 1 }}>
+          AIRBOX ENGENHARIA
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
-  const readOnly = new URLSearchParams(window.location.search).get("key") !== "sdm2025@admin";
+  const [auth, setAuth] = useState(null); // null = login screen, true = admin, false = visitor
+  const [dashVisible, setDashVisible] = useState(false);
+  const readOnly = auth !== true;
   const [view, setView] = useState("overview");
   const [activeLayer, setActiveLayerRaw] = useState("lavagem");
   const [heatmap, setHeatmap] = useState(false);
@@ -850,6 +957,11 @@ export default function App() {
   const saveTimer = useRef(null);
   const skipNextRealtime = useRef(false);
   const userDirty = useRef(false);
+
+  const handleLogin = useCallback((isAdmin) => {
+    setAuth(isAdmin);
+    setTimeout(() => setDashVisible(true), 50);
+  }, []);
 
   const setStatusesByUser = useCallback((updater) => {
     if (readOnly) return;
@@ -930,11 +1042,29 @@ export default function App() {
     return { done, prog, total: allPoints.length };
   }, [statuses, activeLayer]);
 
+  if (auth === null) {
+    return (
+      <>
+        <style>{`
+          @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap');
+          *{box-sizing:border-box}
+          html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+          input, button { font-family: inherit; }
+          button:hover { filter: brightness(1.12); }
+          @keyframes shake{0%,100%{transform:translateX(0) translateY(-50%)}20%,60%{transform:translateX(-6px) translateY(-50%)}40%,80%{transform:translateX(6px) translateY(-50%)}}
+        `}</style>
+        <LoginScreen onLogin={handleLogin} />
+      </>
+    );
+  }
+
   return (
     <div style={{
       height: "100vh", background: P.bg, color: P.text,
       fontFamily: "'IBM Plex Sans','Segoe UI',sans-serif", padding: "12px 16px",
       display: "flex", flexDirection: "column", overflow: "hidden",
+      opacity: dashVisible ? 1 : 0, transform: dashVisible ? "none" : "translateY(12px)",
+      transition: "opacity 0.6s ease, transform 0.6s ease",
     }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap');
