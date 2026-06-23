@@ -837,7 +837,7 @@ function OverviewCards({ statuses, activeLayer, onSelect }) {
    ════════════════════════════════════════════════════════════════════════ */
 const STORAGE_ROW_ID = "sdm_tracker_status_v1";
 
-const ADMIN_PASS = "sdm2025@admin";
+const ADMIN_PASS = "Airbox2026";
 
 function LoginScreen({ onLogin }) {
   const [pass, setPass] = useState("");
@@ -875,14 +875,18 @@ function LoginScreen({ onLogin }) {
         transform: exiting ? "scale(0.95) translateY(-20px)" : "scale(1)",
         transition: "transform 0.7s ease, opacity 0.7s ease",
       }}>
-        <img src="/logo-airbox.jpg" alt="Airbox" style={{ height: 48, borderRadius: 8 }} />
+        <img src="/logo-airbox.jpg" alt="Airbox" style={{ height: 52, borderRadius: 8 }} />
 
         <div style={{ textAlign: "center" }}>
-          <div style={{ color: "#F5D200", fontSize: 18, fontWeight: 700, letterSpacing: 1, lineHeight: 1.3 }}>
-            UFV SDM — Serra do Mato
+          <div style={{ color: "#F5D200", fontSize: 20, fontWeight: 700, letterSpacing: 0.5, lineHeight: 1.3 }}>
+            UFV Serra do Mato
           </div>
-          <div style={{ color: "#7b8bad", fontSize: 11, letterSpacing: 2, fontFamily: "monospace", marginTop: 4 }}>
-            CONTROLE DE MANUTENÇÃO
+          <div style={{ color: "#7b8bad", fontSize: 11.5, letterSpacing: 1.5, fontFamily: "monospace", marginTop: 5 }}>
+            Trairi/CE
+          </div>
+          <div style={{ width: 40, height: 2, background: "rgba(245,210,0,0.3)", borderRadius: 1, margin: "10px auto 0" }} />
+          <div style={{ color: "#7b8bad", fontSize: 10, letterSpacing: 2, fontFamily: "monospace", marginTop: 8, textTransform: "uppercase" }}>
+            Controle de Manutenção
           </div>
         </div>
 
@@ -934,8 +938,8 @@ function LoginScreen({ onLogin }) {
           </button>
         </div>
 
-        <div style={{ color: "rgba(123,139,173,0.5)", fontSize: 9, fontFamily: "monospace", letterSpacing: 1 }}>
-          AIRBOX ENGENHARIA
+        <div style={{ color: "rgba(123,139,173,0.35)", fontSize: 9, fontFamily: "monospace", letterSpacing: 1.5 }}>
+          POWERED BY AIRBOX
         </div>
       </div>
     </div>
