@@ -1,36 +1,81 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" fill="#0b0f1e"/>
-  <!-- Solar panel -->
-  <g transform="translate(10,8)">
-    <rect x="2" y="6" width="40" height="28" rx="3" fill="#1c2540" stroke="#F5D200" stroke-width="2"/>
-    <!-- Grid lines horizontal -->
-    <line x1="2" y1="15.5" x2="42" y2="15.5" stroke="#F5D200" stroke-width="0.8" opacity="0.6"/>
-    <line x1="2" y1="25" x2="42" y2="25" stroke="#F5D200" stroke-width="0.8" opacity="0.6"/>
-    <!-- Grid lines vertical -->
-    <line x1="15" y1="6" x2="15" y2="34" stroke="#F5D200" stroke-width="0.8" opacity="0.6"/>
-    <line x1="29" y1="6" x2="29" y2="34" stroke="#F5D200" stroke-width="0.8" opacity="0.6"/>
-    <!-- Sun rays -->
-    <circle cx="22" cy="2" r="2" fill="#F5D200"/>
-    <line x1="22" y1="-3" x2="22" y2="-1" stroke="#F5D200" stroke-width="1.5" stroke-linecap="round"/>
-    <line x1="17" y1="-1" x2="18.5" y2="0.5" stroke="#F5D200" stroke-width="1.2" stroke-linecap="round"/>
-    <line x1="27" y1="-1" x2="25.5" y2="0.5" stroke="#F5D200" stroke-width="1.2" stroke-linecap="round"/>
-    <!-- Stand -->
-    <rect x="19" y="34" width="6" height="4" fill="#253050"/>
+  <!-- Sky gradient -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a6dd4"/>
+      <stop offset="60%" stop-color="#5ab0f5"/>
+      <stop offset="100%" stop-color="#a0d8ff"/>
+    </linearGradient>
+    <linearGradient id="grass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3aad3a"/>
+      <stop offset="100%" stop-color="#1e7a1e"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a2744"/>
+      <stop offset="100%" stop-color="#0e1a30"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Sky background -->
+  <rect width="64" height="64" rx="10" fill="url(#sky)"/>
+
+  <!-- Sun -->
+  <circle cx="52" cy="10" r="7" fill="#F5D200" opacity="0.95"/>
+  <circle cx="52" cy="10" r="10" fill="#F5D200" opacity="0.15"/>
+
+  <!-- Grass ground -->
+  <path d="M0,42 Q16,38 32,40 Q48,42 64,39 L64,64 Q64,64 54,64 L10,64 Q0,64 0,54 Z" fill="url(#grass)"/>
+  <!-- Grass texture blades -->
+  <path d="M3,44 L5,39 L7,44" fill="#2d9e2d" opacity="0.7"/>
+  <path d="M12,42 L14,37 L16,42" fill="#2d9e2d" opacity="0.6"/>
+  <path d="M22,43 L24,38 L26,43" fill="#2d9e2d" opacity="0.7"/>
+  <path d="M34,42 L36,37 L38,42" fill="#2d9e2d" opacity="0.5"/>
+  <path d="M44,41 L46,36 L48,41" fill="#2d9e2d" opacity="0.6"/>
+  <path d="M54,42 L56,37 L58,42" fill="#2d9e2d" opacity="0.7"/>
+  <path d="M8,46 L10,42 L12,46" fill="#2d9e2d" opacity="0.4"/>
+  <path d="M28,45 L30,41 L32,45" fill="#2d9e2d" opacity="0.4"/>
+  <path d="M48,44 L50,40 L52,44" fill="#2d9e2d" opacity="0.5"/>
+
+  <!-- Solar panel - perspective (almost flat/tilted) -->
+  <g>
+    <!-- Panel support pole -->
+    <rect x="20" y="34" width="3" height="10" rx="1" fill="#555" />
+    <rect x="40" y="36" width="3" height="8" rx="1" fill="#555" />
+
+    <!-- Panel surface - parallelogram shape for perspective tilt -->
+    <polygon points="8,24 56,20 58,34 6,38" fill="url(#panel)" stroke="#3a5a8a" stroke-width="1.2"/>
+
+    <!-- Panel frame highlight -->
+    <polygon points="8,24 56,20 58,34 6,38" fill="none" stroke="#5a8abf" stroke-width="0.5" opacity="0.4"/>
+
+    <!-- Grid lines horizontal (perspective) -->
+    <line x1="7.5" y1="27.5" x2="56.5" y2="23.5" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="7" y1="31" x2="57" y2="27" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="6.5" y1="34.5" x2="57.5" y2="30.5" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+
+    <!-- Grid lines vertical (converging for perspective) -->
+    <line x1="14.5" y1="23.2" x2="13.5" y2="37.2" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="22" y1="22.3" x2="21" y2="36.3" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="29.5" y1="21.5" x2="29" y2="35.5" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="37" y1="20.7" x2="37" y2="34.7" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="44.5" y1="19.9" x2="45" y2="33.9" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+    <line x1="51" y1="19.2" x2="52" y2="33.2" stroke="#4a7ab0" stroke-width="0.7" opacity="0.6"/>
+
+    <!-- Reflection glare -->
+    <polygon points="10,25 30,22 31,26 9,29" fill="white" opacity="0.08"/>
   </g>
-  <!-- Gear (maintenance) -->
-  <g transform="translate(44,46)">
-    <circle cx="0" cy="0" r="6" fill="none" stroke="#00e5a0" stroke-width="2.2"/>
-    <circle cx="0" cy="0" r="2.2" fill="#00e5a0"/>
-    <!-- Gear teeth -->
-    <rect x="-1.3" y="-9" width="2.6" height="4" rx="0.8" fill="#00e5a0"/>
-    <rect x="-1.3" y="5" width="2.6" height="4" rx="0.8" fill="#00e5a0"/>
-    <rect x="-9" y="-1.3" width="4" height="2.6" rx="0.8" fill="#00e5a0"/>
-    <rect x="5" y="-1.3" width="4" height="2.6" rx="0.8" fill="#00e5a0"/>
-    <rect x="4.2" y="-6.5" width="2.6" height="4" rx="0.8" fill="#00e5a0" transform="rotate(45,5.5,-4.5)"/>
-    <rect x="-6.8" y="2.5" width="2.6" height="4" rx="0.8" fill="#00e5a0" transform="rotate(45,-5.5,4.5)"/>
-    <rect x="-6.8" y="-6.5" width="2.6" height="4" rx="0.8" fill="#00e5a0" transform="rotate(-45,-5.5,-4.5)"/>
-    <rect x="4.2" y="2.5" width="2.6" height="4" rx="0.8" fill="#00e5a0" transform="rotate(-45,5.5,4.5)"/>
+
+  <!-- Gear (maintenance) bottom-right -->
+  <g transform="translate(51,52)">
+    <circle cx="0" cy="0" r="5.5" fill="none" stroke="#F5D200" stroke-width="2"/>
+    <circle cx="0" cy="0" r="2" fill="#F5D200"/>
+    <rect x="-1.2" y="-8.2" width="2.4" height="3.5" rx="0.7" fill="#F5D200"/>
+    <rect x="-1.2" y="4.7" width="2.4" height="3.5" rx="0.7" fill="#F5D200"/>
+    <rect x="-8.2" y="-1.2" width="3.5" height="2.4" rx="0.7" fill="#F5D200"/>
+    <rect x="4.7" y="-1.2" width="3.5" height="2.4" rx="0.7" fill="#F5D200"/>
+    <rect x="3.5" y="-6" width="2.4" height="3.5" rx="0.7" fill="#F5D200" transform="rotate(45,4.7,-4.3)"/>
+    <rect x="-5.9" y="2.5" width="2.4" height="3.5" rx="0.7" fill="#F5D200" transform="rotate(45,-4.7,4.3)"/>
+    <rect x="-5.9" y="-6" width="2.4" height="3.5" rx="0.7" fill="#F5D200" transform="rotate(-45,-4.7,-4.3)"/>
+    <rect x="3.5" y="2.5" width="2.4" height="3.5" rx="0.7" fill="#F5D200" transform="rotate(-45,4.7,4.3)"/>
   </g>
-  <!-- Wrench hint -->
-  <text x="8" y="56" font-size="11" font-family="monospace" font-weight="700" fill="#F5D200" opacity="0.9">SDM</text>
 </svg>
