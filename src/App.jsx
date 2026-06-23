@@ -137,17 +137,21 @@ function useSubGeometry(key) {
 }
 
 /* ── status helpers ──────────────────────────────────────────────────── */
-function getFocoMaxLevel(statuses, subKey, focoType) {
-  const data = statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][focoType];
+function getFocoMaxLevel(statuses, subKey, focoType, cycle) {
+  const bucket = statuses[`_focos_${cycle}`];
+  const data = bucket && bucket[subKey] && bucket[subKey][focoType];
   if (!data) return 0;
   for (let lvl = 4; lvl >= 1; lvl--) { if ((data[lvl] || 0) > 0) return lvl; }
   return 0;
 }
-function getFocoTotal(statuses, subKey, focoType) {
-  const data = statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][focoType];
+function getFocoTotal(statuses, subKey, focoType, cycle) {
+  const bucket = statuses[`_focos_${cycle}`];
+  const data = bucket && bucket[subKey] && bucket[subKey][focoType];
   if (!data) return 0;
   return [1, 2, 3, 4].reduce((s, lvl) => s + (data[lvl] || 0), 0);
 }
+function isFocosLayer(layer) { return layer === "pragas_focos_c1" || layer === "pragas_focos_c2"; }
+function focoCycleKey(layer) { return layer === "pragas_focos_c2" ? "c2" : "c1"; }
 function focoHeatColor(level) {
   if (level <= 0) return "transparent";
   const colors = ["#facc15", "#ff9b3d", "#ff5f3d", "#dc2626"];
@@ -213,7 +217,7 @@ function LayerTabs({ active, onChange }) {
     }}>
       {main.map((l) => {
         const isPragasGroup = l.group === "pragas";
-        const on = isPragasGroup ? (active === "pragas_c1" || active === "pragas_c2" || active === "pragas_focos") : active === l.key;
+        const on = isPragasGroup ? (active === "pragas_c1" || active === "pragas_c2" || isFocosLayer(active)) : active === l.key;
         return (
           <button key={l.key} onClick={() => onChange(isPragasGroup ? "pragas_c1" : l.key)} style={{
             display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
@@ -234,8 +238,9 @@ function LayerTabs({ active, onChange }) {
 function PragasSubTabs({ active, onChange }) {
   const tabs = [
     { key: "pragas_c1", label: "Ciclo 1" },
+    { key: "pragas_focos_c1", label: "Focos C1", accent: true },
     { key: "pragas_c2", label: "Ciclo 2" },
-    { key: "pragas_focos", label: "Focos" },
+    { key: "pragas_focos_c2", label: "Focos C2", accent: true },
   ];
   return (
     <div style={{
@@ -248,8 +253,8 @@ function PragasSubTabs({ active, onChange }) {
           <button key={t.key} onClick={() => onChange(t.key)} style={{
             padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: on ? P.done + "22" : "transparent",
-            color: on ? P.done : P.muted,
+            background: on ? (t.accent ? P.warn + "22" : P.done + "22") : "transparent",
+            color: on ? (t.accent ? P.warn : P.done) : P.muted,
             transition: "all .12s",
           }}>
             {t.label}
@@ -491,7 +496,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
     setLastClicked({ subKey, n });
   }, [statuses, subKey, activeLayer, lastClicked, applyToTrackers]);
 
-  const isFocos = activeLayer === "pragas_focos";
+  const isFocos = isFocosLayer(activeLayer);
   const safeLayer = isFocos ? "pragas_c1" : activeLayer;
   const stat = isFocos ? { done: 0, prog: 0, total: 0, pending: 0 } : countDone(statuses, subKey, geo.trackers, safeLayer);
   const colors = STATE_COLORS[safeLayer];
@@ -530,10 +535,10 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
         <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-        {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || activeLayer === "pragas_focos") && (
+        {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer)) && (
           <>
             <PragasSubTabs active={activeLayer} onChange={setActiveLayer} />
-            {activeLayer === "pragas_focos" && <FocoTypeChips active={focoType} onChange={setFocoType} />}
+            {isFocosLayer(activeLayer) && <FocoTypeChips active={focoType} onChange={setFocoType} />}
           </>
         )}
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -558,7 +563,10 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </div>
       </div>
 
-      {isFocos ? (
+      {isFocos ? (() => {
+        const cyc = focoCycleKey(activeLayer);
+        const bucketKey = `_focos_${cyc}`;
+        return (
         <div style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
           <div style={{
             flex: "2 1 420px", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12,
@@ -589,8 +597,14 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           </div>
 
           <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+            <div style={{ background: P.card2, borderRadius: 8, padding: "6px 12px", textAlign: "center" }}>
+              <span style={{ color: P.warn, fontSize: 11, fontWeight: 700, fontFamily: "monospace", letterSpacing: 1 }}>
+                FOCOS — CICLO {cyc === "c1" ? "1" : "2"}
+              </span>
+            </div>
             {FOCO_TYPES.map((ft) => {
-              const focoData = (statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][ft.key]) || {};
+              const bucket = statuses[bucketKey] || {};
+              const focoData = (bucket[subKey] && bucket[subKey][ft.key]) || {};
               const counts = FOCO_LEVELS.slice(1).map((_, i) => focoData[i + 1] || 0);
               const total = counts.reduce((s, c) => s + c, 0);
               const maxLevel = counts.reduce((m, c, i) => c > 0 ? i + 1 : m, 0);
@@ -612,13 +626,13 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                           onChange={(e) => {
                             const v = Math.max(0, parseInt(e.target.value) || 0);
                             setStatuses((prev) => {
-                              const focos = { ...(prev._focos || {}) };
+                              const focos = { ...(prev[bucketKey] || {}) };
                               const sub = { ...(focos[subKey] || {}) };
                               const ftData = { ...(sub[ft.key] || {}) };
                               ftData[lvl] = v;
                               sub[ft.key] = ftData;
                               focos[subKey] = sub;
-                              return { ...prev, _focos: focos };
+                              return { ...prev, [bucketKey]: focos };
                             });
                           }}
                           style={{
@@ -634,7 +648,8 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             })}
           </div>
         </div>
-      ) : (
+        );
+      })() : (
         <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, flexShrink: 0 }}>
         <FilterChips activeLayer={activeLayer} filter={filter} onChange={setFilter} />
@@ -826,7 +841,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType }) {
   const [, tick] = useReducer((n) => n + 1, 0);
   useMapEvents({ move: tick, zoom: tick, resize: tick });
 
-  const isFocos = activeLayer === "pragas_focos";
+  const isFocos = isFocosLayer(activeLayer);
   const realLayer = isFocos ? "pragas_c1" : activeLayer;
   const idx = LAYER_IDX[realLayer];
   const size = map.getSize();
@@ -854,8 +869,9 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType }) {
       ? trackers.reduce((s, [n]) => s + (LAYER_PCT[realLayer]?.[getStatus(statuses, key, n)[idx]] ?? 0), 0) / (trackers.length || 1)
       : 0;
 
-    const focoLevel = isFocos ? getFocoMaxLevel(statuses, key, focoType) : 0;
-    const focoTotal = isFocos ? getFocoTotal(statuses, key, focoType) : 0;
+    const focoCycle = isFocos ? focoCycleKey(activeLayer) : "c1";
+    const focoLevel = isFocos ? getFocoMaxLevel(statuses, key, focoType, focoCycle) : 0;
+    const focoTotal = isFocos ? getFocoTotal(statuses, key, focoType, focoCycle) : 0;
 
     return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoLevel };
   });
@@ -1188,7 +1204,7 @@ export default function App() {
   const [heatmap, setHeatmap] = useState(false);
   const [focoType, setFocoType] = useState("formigas");
   const setActiveLayer = (layer) => {
-    if (layer === "trator" || layer === "trackers" || layer === "pragas_focos") setHeatmap(false);
+    if (layer === "trator" || layer === "trackers" || isFocosLayer(layer)) setHeatmap(false);
     setActiveLayerRaw(layer);
   };
   const [mapZoom, setMapZoom] = useState(15);
@@ -1276,7 +1292,7 @@ export default function App() {
   }, [statuses, loaded]);
 
   const globalStat = useMemo(() => {
-    if (activeLayer === "pragas_focos") return { done: 0, prog: 0, total: 0 };
+    if (isFocosLayer(activeLayer)) return { done: 0, prog: 0, total: 0 };
     const realLayer = activeLayer;
     const allPoints = SUB_KEYS.flatMap((k) => PLANT[k].t.map((t) => ({ key: k, n: t[0] })));
     const idx = LAYER_IDX[realLayer];
@@ -1349,13 +1365,13 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
               <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-              {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || activeLayer === "pragas_focos") && (
+              {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer)) && (
                 <>
                   <PragasSubTabs active={activeLayer} onChange={setActiveLayer} />
-                  {activeLayer === "pragas_focos" && <FocoTypeChips active={focoType} onChange={setFocoType} />}
+                  {isFocosLayer(activeLayer) && <FocoTypeChips active={focoType} onChange={setFocoType} />}
                 </>
               )}
-              {activeLayer !== "trator" && activeLayer !== "trackers" && activeLayer !== "pragas_focos" && (
+              {activeLayer !== "trator" && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && (
                 <button onClick={() => setHeatmap((h) => !h)} style={{
                   padding: "4px 10px", borderRadius: 7,
                   border: `1px solid ${heatmap ? P.accent + "55" : P.border}`,
@@ -1387,7 +1403,7 @@ export default function App() {
                 </button>
               </div>
             </div>
-            {activeLayer === "pragas_focos" && (
+            {isFocosLayer(activeLayer) && (
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {FOCO_LEVELS.map((l, i) => i > 0 && (
                   <div key={l} style={{ display: "flex", alignItems: "center", gap: 5 }}>
@@ -1397,7 +1413,7 @@ export default function App() {
                 ))}
               </div>
             )}
-            {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && activeLayer !== "pragas_focos" && <Legend activeLayer={activeLayer} />}
+            {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
             <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} heatmap={heatmap} onZoomChange={setMapZoom}
               focoType={focoType} />
           </div>
