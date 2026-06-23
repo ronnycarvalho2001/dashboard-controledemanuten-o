@@ -307,7 +307,7 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
 /* ════════════════════════════════════════════════════════════════════════
    PAINEL DE GRUPOS
    ════════════════════════════════════════════════════════════════════════ */
-function GroupPanel({ geo, subKey, statuses, activeLayer, onBulk }) {
+function GroupPanel({ geo, subKey, statuses, activeLayer, onBulk, readOnly }) {
   const colors = STATE_COLORS[activeLayer];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 7, maxHeight: 260, overflowY: "auto", paddingRight: 4 }}>
@@ -324,10 +324,10 @@ function GroupPanel({ geo, subKey, statuses, activeLayer, onBulk }) {
               <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[LAYER_DONE_IDX[activeLayer]]} />
             </div>
             <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "monospace", width: 42, textAlign: "right" }}>{stat.done}/{stat.total}</span>
-            <button onClick={() => onBulk(g.trackers.map((t) => t[0]), complete ? 0 : 2)} title={complete ? "Resetar grupo" : "Concluir grupo"} style={{
+            {!readOnly && <button onClick={() => onBulk(g.trackers.map((t) => t[0]), complete ? 0 : 2)} title={complete ? "Resetar grupo" : "Concluir grupo"} style={{
               background: complete ? P.danger + "18" : P.accentG, border: `1px solid ${complete ? P.danger + "55" : P.accent + "55"}`,
               color: complete ? P.danger : P.accent, borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
-            }}>{complete ? "↺" : "✓"}</button>
+            }}>{complete ? "↺" : "✓"}</button>}
           </div>
         );
       })}
@@ -367,7 +367,7 @@ function RangeTool({ activeLayer, onApply }) {
 /* ════════════════════════════════════════════════════════════════════════
    VISÃO DE UM SUBCAMPO
    ════════════════════════════════════════════════════════════════════════ */
-function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLayer, onNavigate }) {
+function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLayer, onNavigate, readOnly }) {
   const geo = useSubGeometry(subKey);
   const [filter, setFilter] = useState(null);
   const [showGroups, setShowGroups] = useState(true);
@@ -490,7 +490,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           </div>
           <SubMap geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
             filter={filter} showGroups={showGroups} selected={selected}
-            onClick={handleTrackerClick} scale={scale} />
+            onClick={readOnly ? () => {} : handleTrackerClick} scale={scale} />
         </div>
 
         <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
@@ -510,46 +510,50 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             ))}
           </div>
 
-          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
-            {selected != null ? (
-              <div>
-                <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 8, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
-                {LAYERS.map((l, i) => {
-                  const stateColor = STATE_COLORS[l.key][selStatus[i]];
-                  return (
-                    <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                      <span style={{ fontSize: 11, color: P.muted, width: 96, fontFamily: "inherit" }}>{l.label}</span>
-                      <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % LAYERS[i].states.length)} style={{
-                        display: "flex", alignItems: "center", gap: 5,
-                        background: stateColor + "1e", border: `1px solid ${stateColor}55`,
-                        color: stateColor, borderRadius: 99, padding: "4px 11px",
-                        fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-                        transition: "all .12s",
-                      }}>
-                        <div style={{ width: 6, height: 6, borderRadius: "50%", background: stateColor, flexShrink: 0 }} />
-                        {l.states[selStatus[i]]}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            ) : <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver e editar o status. Shift+clique pinta um intervalo.</div>}
-          </div>
+          {!readOnly && (
+            <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
+              {selected != null ? (
+                <div>
+                  <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 8, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
+                  {LAYERS.map((l, i) => {
+                    const stateColor = STATE_COLORS[l.key][selStatus[i]];
+                    return (
+                      <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 11, color: P.muted, width: 96, fontFamily: "inherit" }}>{l.label}</span>
+                        <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % LAYERS[i].states.length)} style={{
+                          display: "flex", alignItems: "center", gap: 5,
+                          background: stateColor + "1e", border: `1px solid ${stateColor}55`,
+                          color: stateColor, borderRadius: 99, padding: "4px 11px",
+                          fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                          transition: "all .12s",
+                        }}>
+                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: stateColor, flexShrink: 0 }} />
+                          {l.states[selStatus[i]]}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver e editar o status. Shift+clique pinta um intervalo.</div>}
+            </div>
+          )}
 
-          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>MARCAR INTERVALO (1–132)</div>
-            <RangeTool activeLayer={activeLayer} onApply={(from, to, val) => {
-              const lo = Math.max(1, Math.min(from, to)), hi = Math.min(132, Math.max(from, to));
-              const ns = []; for (let i = lo; i <= hi; i++) ns.push(i);
-              applyToTrackers(ns, val);
-            }} />
-          </div>
+          {!readOnly && (
+            <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>MARCAR INTERVALO (1–132)</div>
+              <RangeTool activeLayer={activeLayer} onApply={(from, to, val) => {
+                const lo = Math.max(1, Math.min(from, to)), hi = Math.min(132, Math.max(from, to));
+                const ns = []; for (let i = lo; i <= hi; i++) ns.push(i);
+                applyToTrackers(ns, val);
+              }} />
+            </div>
+          )}
 
           <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
             <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>GRUPOS DE COMANDO</div>
             <GroupPanel geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
-              onBulk={(ns, val) => applyToTrackers(ns, val)} />
+              onBulk={readOnly ? () => {} : (ns, val) => applyToTrackers(ns, val)} readOnly={readOnly} />
           </div>
 
           <Legend activeLayer={activeLayer} />
@@ -834,6 +838,7 @@ function OverviewCards({ statuses, activeLayer, onSelect }) {
 const STORAGE_ROW_ID = "sdm_tracker_status_v1";
 
 export default function App() {
+  const readOnly = new URLSearchParams(window.location.search).has("view");
   const [view, setView] = useState("overview");
   const [activeLayer, setActiveLayerRaw] = useState("lavagem");
   const [heatmap, setHeatmap] = useState(false);
@@ -847,9 +852,10 @@ export default function App() {
   const userDirty = useRef(false);
 
   const setStatusesByUser = useCallback((updater) => {
+    if (readOnly) return;
     userDirty.current = true;
     setStatuses(updater);
-  }, []);
+  }, [readOnly]);
 
   useEffect(() => {
     let channel;
@@ -957,7 +963,14 @@ export default function App() {
               CONTROLE DE MANUTENÇÃO
             </div>
           </div>
-          <div style={{ marginLeft: "auto" }}>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            {readOnly && (
+              <span style={{
+                background: P.info + "22", border: `1px solid ${P.info}55`, color: P.info,
+                borderRadius: 99, padding: "3px 10px", fontSize: 10, fontWeight: 700,
+                fontFamily: "monospace", letterSpacing: 0.5,
+              }}>SOMENTE VISUALIZAÇÃO</span>
+            )}
             <SyncBadge state={syncState} />
           </div>
         </div>
@@ -1007,7 +1020,7 @@ export default function App() {
           <div style={{ flex: 1, minHeight: 0 }}>
             <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatusesByUser}
               activeLayer={activeLayer} setActiveLayer={setActiveLayer}
-              onNavigate={(key) => setView(key || "overview")} />
+              onNavigate={(key) => setView(key || "overview")} readOnly={readOnly} />
           </div>
         )}
       </div>
