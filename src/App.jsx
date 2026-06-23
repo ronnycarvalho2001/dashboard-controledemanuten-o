@@ -376,6 +376,14 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const [scale, setScale] = useState(1);
   const containerRef = useRef(null);
 
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    setScale((s) => {
+      const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+      return Math.min(8, Math.max(1, s * factor));
+    });
+  }, []);
+
   const applyToTrackers = useCallback((ns, value) => {
     setStatuses((prev) => {
       const next = { ...prev, [subKey]: { ...(prev[subKey] || {}) } };
@@ -472,13 +480,13 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
       </div>
 
       <div style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
-        <div ref={containerRef} style={{
+        <div ref={containerRef} onWheel={handleWheel} style={{
           flex: "2 1 420px", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12,
           padding: 12, overflow: "hidden", position: "relative",
         }}>
           <div style={{ position: "absolute", top: 10, right: 10, zIndex: 2, display: "flex", gap: 6 }}>
-            <button onClick={() => setScale((s) => Math.min(8, s * 1.25))} style={zoomBtnStyle}>＋</button>
-            <button onClick={() => setScale((s) => Math.max(1, s / 1.25))} style={zoomBtnStyle}>－</button>
+            <button onClick={() => setScale((s) => Math.min(8, s * 1.1))} style={zoomBtnStyle}>＋</button>
+            <button onClick={() => setScale((s) => Math.max(1, s / 1.1))} style={zoomBtnStyle}>－</button>
           </div>
           <SubMap geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
             filter={filter} showGroups={showGroups} selected={selected}
@@ -699,7 +707,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
           {boxData.map(({ key, hullStr, avgHeat }) => (
             <polygon key={key + "-r"} points={hullStr}
               fill={heatColor(avgHeat)} opacity={0.88}
-              style={{ pointerEvents: "auto", cursor: "pointer" }} onClick={() => onSelect(key)} />
+              style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
           ))}
           {boxData.map(({ key, cx, cy, avgHeat }) => (
             <g key={key + "-t"} style={{ pointerEvents: "none" }}>
@@ -722,7 +730,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
           {boxData.map(({ key, pct, hullStr }) => (
             <polygon key={key + "-fill"} points={hullStr}
               fill="rgba(16,23,41,0.72)" stroke={pct === 1 ? P.done : P.border} strokeWidth={2}
-              style={{ cursor: "pointer", pointerEvents: "auto" }} onClick={() => onSelect(key)} />
+              style={{ cursor: "pointer", pointerEvents: "auto" }} onDoubleClick={() => onSelect(key)} />
           ))}
           {/* Pass 2: tracker dots */}
           {trackerDots.map(({ key, n, pt, val }) => (
@@ -762,6 +770,7 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange })
         center={PLANT_CENTER_LL} zoom={15}
         style={{ width: "100%", height: "100%" }}
         zoomControl={true} attributionControl={false}
+        zoomSnap={0.25} zoomDelta={0.5} wheelPxPerZoomLevel={120}
       >
         <TileLayer
           url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
@@ -805,7 +814,7 @@ function OverviewCards({ statuses, activeLayer, onSelect }) {
         const pct = stat.total ? Math.round((stat.done / stat.total) * 100) : 0;
         const colors = STATE_COLORS[activeLayer];
         return (
-          <button key={key} onClick={() => onSelect(key)} style={{
+          <button key={key} onDoubleClick={() => onSelect(key)} style={{
             textAlign: "left", background: P.card, border: `1px solid ${pct === 100 ? P.accent + "77" : P.border}`,
             borderRadius: 10, padding: "12px 14px", cursor: "pointer", fontFamily: "inherit",
           }}>
