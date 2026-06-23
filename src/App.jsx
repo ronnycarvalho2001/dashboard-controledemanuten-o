@@ -48,8 +48,14 @@ const FOCO_VISITS = [
   { key: "v1", label: "Visita 1" },
   { key: "v2", label: "Visita 2" },
 ];
-const FOCO_LEVELS = ["Sem foco", "Baixo", "Médio", "Alto", "Crítico"];
-const FOCO_COLORS = ["transparent", "#facc15", "#ff9b3d", "#ff5f3d", "#dc2626"];
+function focoQtyColor(qty, maxQty) {
+  if (qty <= 0 || maxQty <= 0) return "transparent";
+  const p = Math.min(1, qty / maxQty);
+  const r = Math.round(250 * p + 250 * (1 - p));
+  const g = Math.round(50 * p + 204 * (1 - p));
+  const b = Math.round(30 * p + 21 * (1 - p));
+  return `rgb(${r},${g},${b})`;
+}
 
 const P = {
   bg: "#0b0f1e", surface: "#101729", card: "#161e30", card2: "#1c2540", border: "#253050",
@@ -142,26 +148,17 @@ function useSubGeometry(key) {
 
 /* ── status helpers ──────────────────────────────────────────────────── */
 function focoKey(cycle, visit) { return `_focos_${cycle}_${visit}`; }
-function getFocoMaxLevel(statuses, subKey, focoType, cycle, visit) {
+function getFocoQty(statuses, subKey, focoType, cycle, visit) {
   const bucket = statuses[focoKey(cycle, visit)];
-  const data = bucket && bucket[subKey] && bucket[subKey][focoType];
-  if (!data) return 0;
-  for (let lvl = 4; lvl >= 1; lvl--) { if ((data[lvl] || 0) > 0) return lvl; }
-  return 0;
+  return (bucket && bucket[subKey] && bucket[subKey][focoType]) || 0;
 }
-function getFocoTotal(statuses, subKey, focoType, cycle, visit) {
-  const bucket = statuses[focoKey(cycle, visit)];
-  const data = bucket && bucket[subKey] && bucket[subKey][focoType];
-  if (!data) return 0;
-  return [1, 2, 3, 4].reduce((s, lvl) => s + (data[lvl] || 0), 0);
+function getFocoTotalAll(statuses, subKey, cycle, visit) {
+  let total = 0;
+  FOCO_TYPES.forEach((ft) => { total += getFocoQty(statuses, subKey, ft.key, cycle, visit); });
+  return total;
 }
 function isFocosLayer(layer) { return layer === "pragas_focos_c1" || layer === "pragas_focos_c2"; }
 function focoCycleKey(layer) { return layer === "pragas_focos_c2" ? "c2" : "c1"; }
-function focoHeatColor(level) {
-  if (level <= 0) return "transparent";
-  const colors = ["#facc15", "#ff9b3d", "#ff5f3d", "#dc2626"];
-  return colors[Math.min(level - 1, 3)];
-}
 function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
   return LAYERS.map((_, i) => arr[i] ?? 0);
@@ -633,45 +630,28 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             </div>
             {FOCO_TYPES.map((ft) => {
               const bucket = statuses[bucketKey] || {};
-              const focoData = (bucket[subKey] && bucket[subKey][ft.key]) || {};
-              const counts = FOCO_LEVELS.slice(1).map((_, i) => focoData[i + 1] || 0);
-              const total = counts.reduce((s, c) => s + c, 0);
-              const maxLevel = counts.reduce((m, c, i) => c > 0 ? i + 1 : m, 0);
+              const val = (bucket[subKey] && bucket[subKey][ft.key]) || 0;
               return (
                 <div key={ft.key} style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: "50%", background: maxLevel > 0 ? FOCO_COLORS[maxLevel] : P.border }} />
-                    <span style={{ color: P.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace" }}>{ft.label}</span>
-                    <span style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginLeft: "auto" }}>Total: {total}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ color: P.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace", flex: 1 }}>{ft.label}</span>
+                    <input type="number" min={0} value={val} disabled={readOnly}
+                      onChange={(e) => {
+                        const v = Math.max(0, parseInt(e.target.value) || 0);
+                        setStatuses((prev) => {
+                          const focos = { ...(prev[bucketKey] || {}) };
+                          const sub = { ...(focos[subKey] || {}) };
+                          sub[ft.key] = v;
+                          focos[subKey] = sub;
+                          return { ...prev, [bucketKey]: focos };
+                        });
+                      }}
+                      style={{
+                        width: 80, padding: "8px 10px", borderRadius: 8, fontSize: 16, fontWeight: 700,
+                        background: P.bg, border: `1px solid ${P.border}`, color: val > 0 ? P.warn : P.muted,
+                        fontFamily: "monospace", textAlign: "center", outline: "none",
+                      }} />
                   </div>
-                  {FOCO_LEVELS.slice(1).map((level, i) => {
-                    const lvl = i + 1;
-                    const val = focoData[lvl] || 0;
-                    return (
-                      <div key={lvl} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: FOCO_COLORS[lvl], flexShrink: 0 }} />
-                        <span style={{ flex: 1, fontSize: 12, color: P.muted, fontFamily: "monospace" }}>{level}</span>
-                        <input type="number" min={0} value={val} disabled={readOnly}
-                          onChange={(e) => {
-                            const v = Math.max(0, parseInt(e.target.value) || 0);
-                            setStatuses((prev) => {
-                              const focos = { ...(prev[bucketKey] || {}) };
-                              const sub = { ...(focos[subKey] || {}) };
-                              const ftData = { ...(sub[ft.key] || {}) };
-                              ftData[lvl] = v;
-                              sub[ft.key] = ftData;
-                              focos[subKey] = sub;
-                              return { ...prev, [bucketKey]: focos };
-                            });
-                          }}
-                          style={{
-                            width: 64, padding: "5px 8px", borderRadius: 8, fontSize: 13, fontWeight: 700,
-                            background: P.bg, border: `1px solid ${P.border}`, color: val > 0 ? FOCO_COLORS[lvl] : P.muted,
-                            fontFamily: "monospace", textAlign: "center", outline: "none",
-                          }} />
-                      </div>
-                    );
-                  })}
                 </div>
               );
             })}
@@ -899,11 +879,13 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
       : 0;
 
     const focoCycle = isFocos ? focoCycleKey(activeLayer) : "c1";
-    const focoLevel = isFocos ? getFocoMaxLevel(statuses, key, focoType, focoCycle, focoVisit) : 0;
-    const focoTotal = isFocos ? getFocoTotal(statuses, key, focoType, focoCycle, focoVisit) : 0;
+    const focoQty = isFocos ? getFocoQty(statuses, key, focoType, focoCycle, focoVisit) : 0;
+    const focoTotal = isFocos ? getFocoTotalAll(statuses, key, focoCycle, focoVisit) : 0;
 
-    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoLevel };
+    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoQty, focoTotal };
   });
+
+  const focoMax = isFocos ? Math.max(1, ...boxData.map((d) => d.focoTotal)) : 1;
 
   const fPct = heatmap
     ? boxData.reduce((m, { bw, bh }) => Math.min(m, bh * 0.28, bw * 0.30), Infinity)
@@ -926,36 +908,32 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     >
       {isFocos ? (
         <>
-          {boxData.map(({ key, hullStr, focoLevel, focoTotal, cx, cy, bw, bh }) => (
+          {boxData.map(({ key, hullStr, focoTotal, cx, cy, bw, bh }) => {
+            const color = focoQtyColor(focoTotal, focoMax);
+            return (
             <g key={key}>
               <polygon points={hullStr}
-                fill={focoLevel > 0 ? focoHeatColor(focoLevel) : "rgba(16,23,41,0.72)"}
-                opacity={focoLevel > 0 ? 0.75 : 0.72}
-                stroke={focoLevel > 0 ? focoHeatColor(focoLevel) : P.border} strokeWidth={2}
+                fill={focoTotal > 0 ? color : "rgba(16,23,41,0.72)"}
+                opacity={focoTotal > 0 ? 0.75 : 0.72}
+                stroke={focoTotal > 0 ? color : P.border} strokeWidth={2}
                 style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
               {bw > 24 && bh > 18 && (
-                <text x={cx} y={cy - fName * 0.4} fontSize={fName} fill="#fff" fontFamily="monospace"
+                <text x={cx} y={cy - fName * 0.3} fontSize={fName} fill="#fff" fontFamily="monospace"
                   fontWeight="700" textAnchor="middle" dominantBaseline="middle"
                   stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
                   SDM {key}
                 </text>
               )}
-              {focoTotal > 0 && bw > 24 && (
-                <>
-                  <text x={cx} y={cy + fName * 0.5} fontSize={fName * 0.75} fill="#fff" fontFamily="monospace"
-                    fontWeight="600" textAnchor="middle" dominantBaseline="middle"
-                    stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
-                    {focoTotal} focos
-                  </text>
-                  <text x={cx} y={cy + fName * 1.2} fontSize={fName * 0.6} fill={focoHeatColor(focoLevel)} fontFamily="monospace"
-                    fontWeight="700" textAnchor="middle" dominantBaseline="middle"
-                    stroke="rgba(0,0,0,0.7)" strokeWidth={sw * 0.8} paintOrder="stroke">
-                    {FOCO_LEVELS[focoLevel]}
-                  </text>
-                </>
+              {bw > 24 && (
+                <text x={cx} y={cy + fName * 0.55} fontSize={fPct} fill="#fff" fontFamily="monospace"
+                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.7)" strokeWidth={sw * 1.2} paintOrder="stroke">
+                  {focoTotal}
+                </text>
               )}
             </g>
-          ))}
+            );
+          })}
         </>
       ) : heatmap ? (
         <>
@@ -1437,13 +1415,13 @@ export default function App() {
               </div>
             </div>
             {isFocosLayer(activeLayer) && (
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                {FOCO_LEVELS.map((l, i) => i > 0 && (
-                  <div key={l} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: FOCO_COLORS[i] }} />
-                    <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "monospace" }}>{l}</span>
-                  </div>
-                ))}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Menor</span>
+                <div style={{
+                  width: 100, height: 8, borderRadius: 4,
+                  background: "linear-gradient(to right, #facc15, #ff9b3d, #fa3d2d)",
+                }} />
+                <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Maior</span>
               </div>
             )}
             {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
