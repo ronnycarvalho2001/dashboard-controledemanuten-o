@@ -1,5 +1,9 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, useReducer } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
+import { MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 /* ════════════════════════════════════════════════════════════════════════
    DADOS DA PLANTA — coordenadas reais extraídas do mapa de coordenadas
@@ -15,39 +19,51 @@ const SUB_KEYS = Object.keys(PLANT).sort((a, b) => {
 });
 
 const LAYERS = [
-  { key: "lavagem", label: "Lavagem", icon: "💧",
-    states: ["NÃO LAVADO", "PENDENTE 22 MÓDULOS", "PENDENTE 8 MÓDULOS", "LAVADO PARCIAL 50%", "LAVADO 100%"],
-    doneIdx: 4, progIdxes: [2, 3] },
-  { key: "rocagem", label: "Roçagem", icon: "🌾",
-    states: ["Pendente", "Incompleto", "Concluída"],
-    doneIdx: 2, progIdxes: [1] },
-  { key: "trator", label: "Acesso trator", icon: "🚜",
+  { key: "lavagem", label: "Lavagem",
+    states: ["NÃO LAVADO", "PENDENTE 22 MÓDULOS", "PENDENTE 8 MÓDULOS", "LAVADO PARCIAL 50%", "LAVADO 100%", "Não Classificado"],
+    doneIdx: 4, progIdxes: [2, 3], doneAliases: [5] },
+  { key: "rocagem", label: "Roçagem",
+    states: ["Pendente", "Incompleto", "Concluída", "Não Classificado"],
+    doneIdx: 2, progIdxes: [1], doneAliases: [3] },
+  { key: "pragas", label: "Controle de Pragas",
+    states: ["Pendente", "Aplicação concluída"],
+    doneIdx: 1, progIdxes: [] },
+  { key: "trator", label: "Acesso trator",
     states: ["Não avaliado", "Bloqueado", "Liberado"],
-    doneIdx: 2, progIdxes: [1] },
+    doneIdx: 2, progIdxes: [1], small: true },
+  { key: "trackers", label: "Trackers",
+    states: ["OK", "Alarme de Falha", "Sem Comunicação", "Indefinido"],
+    doneIdx: 0, progIdxes: [], small: true },
 ];
-const LAYER_IDX = { lavagem: 0, rocagem: 1, trator: 2 };
+const LAYER_IDX = { lavagem: 0, rocagem: 1, pragas: 2, trator: 3, trackers: 4 };
 const LAYER_DONE_IDX = Object.fromEntries(LAYERS.map((l) => [l.key, l.doneIdx]));
 
 const P = {
-  bg: "#0d0f14", surface: "#13161d", card: "#181c25", card2: "#1d222d", border: "#252b38",
-  accent: "#00e5a0", accentD: "#00b87d", accentG: "rgba(0,229,160,0.13)",
-  text: "#e8ecf4", muted: "#6b7691", danger: "#ff5f7e", warn: "#ffb347",
+  bg: "#0b0f1e", surface: "#101729", card: "#161e30", card2: "#1c2540", border: "#253050",
+  accent: "#F5D200", accentD: "#C9AC00", accentG: "rgba(245,210,0,0.12)",
+  done: "#00e5a0", doneD: "#00b87d", doneG: "rgba(0,229,160,0.13)",
+  text: "#e8edf8", muted: "#7b8bad", danger: "#ff5f7e", warn: "#ff9b3d",
   info: "#4da6ff", purple: "#c084fc",
+  navy: "#1e2852",
 };
 
 const STATE_COLORS = {
-  lavagem: [P.danger, "#475569", P.info, P.warn, P.accent],
-  rocagem: [P.border, P.warn, P.accent],
-  trator: [P.border, P.danger, P.accent],
+  lavagem: [P.danger, "#475569", P.info, P.warn, P.done, P.muted],
+  rocagem: [P.border, P.warn, P.done, P.muted],
+  pragas: [P.border, P.done],
+  trator: [P.border, P.danger, P.done],
+  trackers: [P.done, P.danger, "#facc15", P.warn],
 };
 
 const GROUP_PALETTE = ["#4da6ff", "#c084fc", "#ffb347", "#00e5a0", "#ff5f7e", "#7dd3fc", "#fb923c", "#a3e635", "#f472b6", "#94a3b8"];
 
 // Fração de módulos lavados por estado (lavagem tem 112 módulos/tracker)
 const LAYER_PCT = {
-  lavagem: [0, (112 - 22) / 112, (112 - 8) / 112, 0.5, 1],
-  rocagem: [0, 0.5, 1],
+  lavagem: [0, (112 - 22) / 112, (112 - 8) / 112, 0.5, 1, 1],
+  rocagem: [0, 0.5, 1, 1],
+  pragas: [0, 1],
   trator: [0, 0, 1],
+  trackers: [1, 0, 0, 0],
 };
 function heatColor(pct) {
   const p = Math.max(0, Math.min(1, pct));
@@ -111,15 +127,17 @@ function useSubGeometry(key) {
 
 /* ── status helpers ──────────────────────────────────────────────────── */
 function getStatus(statuses, subKey, n) {
-  return (statuses[subKey] && statuses[subKey][n]) || [0, 0, 0];
+  const arr = (statuses[subKey] && statuses[subKey][n]) || [];
+  return LAYERS.map((_, i) => arr[i] ?? 0);
 }
 function countDone(statuses, subKey, trackers, layerKey) {
   const idx = LAYER_IDX[layerKey];
   const layer = LAYERS.find((l) => l.key === layerKey);
+  const aliases = layer.doneAliases || [];
   let done = 0, prog = 0;
   trackers.forEach(([n]) => {
     const s = getStatus(statuses, subKey, n)[idx];
-    if (s === layer.doneIdx) done++;
+    if (s === layer.doneIdx || aliases.includes(s)) done++;
     else if (layer.progIdxes.includes(s)) prog++;
   });
   return { done, prog, total: trackers.length, pending: trackers.length - done - prog };
@@ -129,13 +147,22 @@ function countDone(statuses, subKey, trackers, layerKey) {
    COMPONENTES PEQUENOS
    ════════════════════════════════════════════════════════════════════════ */
 function SyncBadge({ state }) {
-  const color = { loading: P.muted, ok: P.accent, saving: P.info, error: P.danger, offline: P.warn }[state] || P.muted;
+  const cfg = {
+    loading: { color: P.muted,   label: "conectando" },
+    ok:      { color: P.done,    label: "sincronizado" },
+    saving:  { color: P.info,    label: "salvando…" },
+    error:   { color: P.danger,  label: "erro" },
+    offline: { color: P.warn,    label: "offline" },
+  }[state] || { color: P.muted, label: state };
   return (
-    <div title={{ loading: "Conectando...", ok: "Sincronizado", saving: "Salvando...", error: "Erro ao sincronizar", offline: "Sem Supabase" }[state]}
-      style={{
-        width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0,
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <div style={{
+        width: 7, height: 7, borderRadius: "50%", background: cfg.color, flexShrink: 0,
         animation: state === "saving" || state === "loading" ? "pulse 1s ease-in-out infinite" : "none",
+        boxShadow: state === "ok" ? `0 0 7px ${cfg.color}99` : "none",
       }} />
+      <span style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.3 }}>{cfg.label}</span>
+    </div>
   );
 }
 
@@ -143,44 +170,61 @@ function ProgressBar({ done, prog, total, color }) {
   const pctDone = total ? (done / total) * 100 : 0;
   const pctProg = total ? (prog / total) * 100 : 0;
   return (
-    <div style={{ background: P.border, borderRadius: 4, height: 7, overflow: "hidden", display: "flex" }}>
-      <div style={{ height: "100%", width: `${pctDone}%`, background: color, transition: "width .3s" }} />
-      <div style={{ height: "100%", width: `${pctProg}%`, background: P.warn, transition: "width .3s" }} />
+    <div style={{ background: P.border, borderRadius: 99, height: 5, overflow: "hidden", display: "flex" }}>
+      <div style={{ height: "100%", width: `${pctDone}%`, background: color, transition: "width .4s ease" }} />
+      <div style={{ height: "100%", width: `${pctProg}%`, background: P.warn + "bb", transition: "width .4s ease" }} />
     </div>
   );
 }
 
 function LayerTabs({ active, onChange }) {
+  const main = LAYERS.filter((l) => !l.small);
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {LAYERS.map((l) => (
-        <button key={l.key} onClick={() => onChange(l.key)} style={{
-          display: "flex", alignItems: "center", gap: 6, padding: "8px 14px",
-          borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontSize: 13, fontWeight: 600,
-          border: `1px solid ${active === l.key ? P.accent : P.border}`,
-          background: active === l.key ? P.accentG : P.card,
-          color: active === l.key ? P.accent : P.muted, transition: "all .15s",
-        }}>
-          <span>{l.icon}</span>{l.label}
-        </button>
-      ))}
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 2,
+      background: P.bg, border: `1px solid ${P.border}`, borderRadius: 10, padding: 3,
+    }}>
+      {main.map((l) => {
+        const on = active === l.key;
+        return (
+          <button key={l.key} onClick={() => onChange(l.key)} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
+            borderRadius: 8, border: "none", cursor: "pointer",
+            fontFamily: "inherit", fontSize: 12.5, fontWeight: 600,
+            background: on ? P.accent : "transparent",
+            color: on ? "#111827" : P.muted,
+            transition: "background .12s, color .12s",
+          }}>
+            {l.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
 
 function FilterChips({ activeLayer, filter, onChange }) {
   const layer = LAYERS.find((l) => l.key === activeLayer);
-  const opts = [{ v: null, label: "Todos" }, { v: 0, label: layer.states[0] }, { v: 1, label: layer.states[1] }, { v: 2, label: layer.states[2] }];
+  const opts = [{ v: null, label: "Todos", color: P.muted }, ...layer.states.map((s, i) => ({ v: i, label: s, color: STATE_COLORS[activeLayer][i] }))];
   return (
-    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-      {opts.map((o) => (
-        <button key={String(o.v)} onClick={() => onChange(filter === o.v ? null : o.v)} style={{
-          padding: "5px 11px", borderRadius: 20, fontSize: 11.5, fontFamily: "inherit", cursor: "pointer",
-          border: `1px solid ${filter === o.v ? P.info : P.border}`,
-          background: filter === o.v ? P.info + "22" : "transparent",
-          color: filter === o.v ? P.info : P.muted, fontWeight: 600,
-        }}>{o.label}</button>
-      ))}
+    <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+      {opts.map((o) => {
+        const on = filter === o.v;
+        return (
+          <button key={String(o.v)} onClick={() => onChange(on ? null : o.v)} style={{
+            display: "flex", alignItems: "center", gap: 5,
+            padding: "4px 11px", borderRadius: 99, fontSize: 11.5,
+            fontFamily: "inherit", cursor: "pointer", fontWeight: 600,
+            border: `1px solid ${on ? o.color + "88" : P.border}`,
+            background: on ? o.color + "1e" : "transparent",
+            color: on ? o.color : P.muted,
+            transition: "all .12s",
+          }}>
+            {o.v !== null && <div style={{ width: 7, height: 7, borderRadius: "50%", background: o.color, flexShrink: 0 }} />}
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -189,11 +233,11 @@ function Legend({ activeLayer }) {
   const layer = LAYERS.find((l) => l.key === activeLayer);
   const colors = STATE_COLORS[activeLayer];
   return (
-    <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11.5, color: P.muted }}>
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
       {layer.states.map((s, i) => (
-        <div key={s} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ width: 12, height: 12, borderRadius: 3, background: colors[i], border: `1px solid ${P.border}` }} />
-          {s}
+        <div key={s} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: colors[i], flexShrink: 0 }} />
+          <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>{s}</span>
         </div>
       ))}
     </div>
@@ -249,7 +293,7 @@ function SubMap({ geo, subKey, statuses, activeLayer, filter, showGroups, select
             style={{ cursor: "pointer" }}
             onClick={(e) => onClick(n, e.shiftKey)}
           >
-            <title>{`${trackerId(subKey, n)}  •  Grupo ${g}\nLavagem: ${LAYERS[0].states[st[0]]}\nRoçagem: ${LAYERS[1].states[st[1]]}\nTrator: ${LAYERS[2].states[st[2]]}`}</title>
+            <title>{`${trackerId(subKey, n)}  •  Grupo ${g}\n${LAYERS.map((l, i) => `${l.label}: ${l.states[st[i]]}`).join("\n")}`}</title>
             <rect x={left} y={top} width={railW} height={markerH} rx={railW * 0.35} />
             <rect x={left + markerW - railW} y={top} width={railW} height={markerH} rx={railW * 0.35} />
             <rect x={left} y={cy - hubH / 2} width={markerW} height={hubH} rx={hubH * 0.3} />
@@ -336,10 +380,10 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
     setStatuses((prev) => {
       const next = { ...prev, [subKey]: { ...(prev[subKey] || {}) } };
       ns.forEach((n) => {
-        const cur = next[subKey][n] || [0, 0, 0];
+        const cur = getStatus({ [subKey]: next[subKey] }, subKey, n);
         const updated = [...cur];
         updated[LAYER_IDX[activeLayer]] = value;
-        if (updated[0] === 0 && updated[1] === 0 && updated[2] === 0) delete next[subKey][n];
+        if (updated.every((v) => v === 0)) delete next[subKey][n];
         else next[subKey][n] = updated;
       });
       return next;
@@ -380,26 +424,43 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
     <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0 }}>
         <button onClick={() => onNavigate(null)} style={{
-          background: "none", border: `1px solid ${P.border}`, color: P.muted, borderRadius: 7,
-          padding: "6px 12px", cursor: "pointer", fontSize: 12.5, fontFamily: "inherit",
+          display: "flex", alignItems: "center", gap: 5,
+          background: "transparent", border: `1px solid ${P.border}`, color: P.muted, borderRadius: 8,
+          padding: "7px 13px", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+          transition: "border-color .12s, color .12s",
         }}>← Visão geral</button>
         <h2 style={{ fontSize: 18, fontWeight: 700, color: P.text, margin: 0 }}>SDM {subKey}</h2>
         <select value={subKey} onChange={(e) => onNavigate(e.target.value)} style={{
-          marginLeft: "auto", background: P.card, border: `1px solid ${P.border}`, color: P.text,
-          borderRadius: 7, padding: "6px 10px", fontSize: 12.5, fontFamily: "inherit",
+          marginLeft: "auto", background: P.bg, border: `1px solid ${P.border}`, color: P.text,
+          borderRadius: 8, padding: "7px 12px", fontSize: 12, fontFamily: "inherit", fontWeight: 600,
+          cursor: "pointer", outline: "none",
         }}>
           {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
         </select>
       </div>
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
         <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-        <div style={{ flex: 1, minWidth: 160 }}>
-          <ProgressBar done={stat.done} prog={stat.prog} total={stat.total} color={colors[LAYER_DONE_IDX[activeLayer]]} />
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
+            padding: "4px 10px", borderRadius: 7,
+            border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
+            cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+            background: activeLayer === "trator" ? P.warn + "22" : "transparent",
+            color: activeLayer === "trator" ? P.warn : P.muted, transition: "all .12s",
+          }}>
+            Acesso trator
+          </button>
+          <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
+            padding: "4px 10px", borderRadius: 7,
+            border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
+            cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+            background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
+            color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
+          }}>
+            Trackers
+          </button>
         </div>
-        <span style={{ fontFamily: "monospace", fontSize: 12, color: colors[LAYER_DONE_IDX[activeLayer]], fontWeight: 700 }}>✓ {stat.done}</span>
-        {stat.prog > 0 && <span style={{ fontFamily: "monospace", fontSize: 12, color: P.warn, fontWeight: 700 }}>½ {stat.prog}</span>}
-        <span style={{ fontFamily: "monospace", fontSize: 12, color: P.muted }}>/{stat.total}</span>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, flexShrink: 0 }}>
@@ -429,7 +490,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>CLASSIFICAÇÃO — {layer.label.toUpperCase()}</div>
             {layer.states.map((s, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                <div style={{ width: 11, height: 11, borderRadius: 3, background: STATE_COLORS[activeLayer][i], flexShrink: 0 }} />
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATE_COLORS[activeLayer][i], flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 11.5, color: P.muted, fontFamily: "monospace" }}>{s}</span>
                 <span style={{ fontSize: 13, fontWeight: 700, color: stateCounts[i] > 0 ? P.text : P.border, fontFamily: "monospace", minWidth: 28, textAlign: "right" }}>
                   {stateCounts[i]}
@@ -446,15 +507,24 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             {selected != null ? (
               <div>
                 <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 8, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
-                {LAYERS.map((l, i) => (
-                  <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 11.5, color: P.muted, width: 92 }}>{l.icon} {l.label}</span>
-                    <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % LAYERS[i].states.length)} style={{
-                      background: STATE_COLORS[l.key][selStatus[i]] + "33", border: `1px solid ${STATE_COLORS[l.key][selStatus[i]]}77`,
-                      color: P.text, borderRadius: 6, padding: "4px 9px", fontSize: 11.5, cursor: "pointer", fontFamily: "inherit",
-                    }}>{l.states[selStatus[i]]}</button>
-                  </div>
-                ))}
+                {LAYERS.map((l, i) => {
+                  const stateColor = STATE_COLORS[l.key][selStatus[i]];
+                  return (
+                    <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                      <span style={{ fontSize: 11, color: P.muted, width: 96, fontFamily: "inherit" }}>{l.label}</span>
+                      <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % LAYERS[i].states.length)} style={{
+                        display: "flex", alignItems: "center", gap: 5,
+                        background: stateColor + "1e", border: `1px solid ${stateColor}55`,
+                        color: stateColor, borderRadius: 99, padding: "4px 11px",
+                        fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                        transition: "all .12s",
+                      }}>
+                        <div style={{ width: 6, height: 6, borderRadius: "50%", background: stateColor, flexShrink: 0 }} />
+                        {l.states[selStatus[i]]}
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             ) : <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver e editar o status. Shift+clique pinta um intervalo.</div>}
           </div>
@@ -487,125 +557,227 @@ const zoomBtnStyle = {
 };
 
 /* ════════════════════════════════════════════════════════════════════════
-   VISÃO GERAL — mapa geral de toda a usina, posições reais
+   VISÃO GERAL — mapa geográfico real (satélite) com overlay SVG calibrado
+   Coordenadas UTM SIRGAS 2000 Zona 24S convertidas para WGS84 lat/lon
    ════════════════════════════════════════════════════════════════════════ */
-function OverviewMap({ statuses, activeLayer, onSelect }) {
-  const containerRef = useRef(null);
-  const [zoom, setZoom] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [heatmap, setHeatmap] = useState(false);
-  const dragRef = useRef(null);
 
-  const { all, minX, maxX, minY, maxY } = useMemo(() => {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    const all = [];
-    SUB_KEYS.forEach((key) => {
-      PLANT[key].t.forEach(([n, x, y, g]) => {
-        all.push({ key, n, x, y, g });
-        if (x < minX) minX = x; if (x > maxX) maxX = x;
-        if (y < minY) minY = y; if (y > maxY) maxY = y;
-      });
-    });
-    return { all, minX, maxX, minY, maxY };
-  }, []);
+function utmToLatLon(E, N) {
+  const k0 = 0.9996, a = 6378137.0, e2 = 0.00669437999014;
+  const lon0 = -39 * Math.PI / 180;
+  const e1 = (1 - Math.sqrt(1 - e2)) / (1 + Math.sqrt(1 - e2));
+  const x = E - 500000, y = N - 10000000;
+  const M = y / k0;
+  const mu = M / (a * (1 - e2 / 4 - 3 * e2 ** 2 / 64 - 5 * e2 ** 3 / 256));
+  const phi1 = mu
+    + (3 * e1 / 2 - 27 * e1 ** 3 / 32) * Math.sin(2 * mu)
+    + (21 * e1 ** 2 / 16 - 55 * e1 ** 4 / 32) * Math.sin(4 * mu)
+    + (151 * e1 ** 3 / 96) * Math.sin(6 * mu);
+  const sp = Math.sin(phi1), cp = Math.cos(phi1), tp = Math.tan(phi1);
+  const N1 = a / Math.sqrt(1 - e2 * sp * sp), T1 = tp * tp, C1 = e2 * cp * cp / (1 - e2);
+  const R1 = a * (1 - e2) / Math.pow(1 - e2 * sp * sp, 1.5), D = x / (N1 * k0);
+  const lat = phi1 - (N1 * tp / R1) * (
+    D * D / 2 - (5 + 3 * T1 + 10 * C1 - 4 * C1 * C1 - 9 * e2 / (1 - e2)) * D ** 4 / 24
+  );
+  const lon = lon0 + (
+    D - (1 + 2 * T1 + C1) * D ** 3 / 6
+    + (5 - 2 * C1 + 28 * T1 - 3 * C1 * C1 + 8 * e2 / (1 - e2) + 24 * T1 * T1) * D ** 5 / 120
+  ) / cp;
+  return [lat * 180 / Math.PI, lon * 180 / Math.PI];
+}
+
+const PLANT_CENTER_LL = utmToLatLon(457786, 9633887);
+
+// Pre-compute tracker lat/lon for dot rendering at high zoom
+const TRACKER_LL = Object.fromEntries(
+  SUB_KEYS.map((key) => [
+    key,
+    PLANT[key].t.map(([n, x, y]) => ({ n, ll: utmToLatLon(x, y) })),
+  ])
+);
+
+// Pre-compute subcampo outline polygons using real row structure of trackers
+const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
+  const trackers = PLANT[key].t;
+
+  // Group trackers into rows by Y coordinate (5 m tolerance)
+  const rowMap = new Map();
+  for (const [, x, y] of trackers) {
+    let foundY = null;
+    for (const ry of rowMap.keys()) {
+      if (Math.abs(ry - y) < 5) { foundY = ry; break; }
+    }
+    if (foundY === null) rowMap.set(y, { minX: x, maxX: x });
+    else {
+      const r = rowMap.get(foundY);
+      if (x < r.minX) r.minX = x;
+      if (x > r.maxX) r.maxX = x;
+    }
+  }
+
+  const rows = [...rowMap.entries()]
+    .map(([y, r]) => ({ y, minX: r.minX, maxX: r.maxX }))
+    .sort((a, b) => b.y - a.y); // N → S
+
+  // Half X margin: median gap between adjacent trackers in same row
+  const allX = trackers.map((t) => t[1]).sort((a, b) => a - b);
+  const xGaps = [];
+  for (let i = 1; i < allX.length; i++) {
+    const g = allX[i] - allX[i - 1];
+    if (g > 0.5 && g < 30) xGaps.push(g);
+  }
+  xGaps.sort((a, b) => a - b);
+  const hx = xGaps.length ? xGaps[Math.floor(xGaps.length / 2)] / 2 : 8;
+
+  // Half Y margin: half the minimum spacing between rows
+  const yGaps = rows.slice(0, -1).map((r, i) => r.y - rows[i + 1].y);
+  const hy = yGaps.length ? Math.min(...yGaps) / 2 : 36;
+
+  // Staircase polygon: trace left edge N→S, then right edge S→N
+  const utmPoly = [
+    ...rows.flatMap((r) => [[r.minX - hx, r.y + hy], [r.minX - hx, r.y - hy]]),
+    ...[...rows].reverse().flatMap((r) => [[r.maxX + hx, r.y - hy], [r.maxX + hx, r.y + hy]]),
+  ];
+
+  return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
+}));
+
+function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
+  const map = useMap();
+  const [, tick] = useReducer((n) => n + 1, 0);
+  useMapEvents({ move: tick, zoom: tick, resize: tick });
 
   const idx = LAYER_IDX[activeLayer];
-  const pad = 30, padTop = 55;
-  const W = maxX - minX + pad * 2, H = maxY - minY + pad + padTop;
-  const toX = (x) => x - minX + pad;
-  const toY = (y) => maxY - y + padTop;
-  const markerW = 9, markerH = 22;
+  const size = map.getSize();
+  const zoom = map.getZoom();
 
-  const subBoxes = useMemo(() => SUB_KEYS.map((key) => {
-    const pts = PLANT[key].t;
-    const xs = pts.map((p) => p[1]), ys = pts.map((p) => p[2]);
-    return { key, minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
-  }), []);
+  const toPixel = (ll) => map.latLngToContainerPoint(L.latLng(ll[0], ll[1]));
 
-  const clampOffset = useCallback((ox, oy, z) => {
-    const vW = W / z, vH = H / z;
-    const maxOx = (W - vW) / 2, maxOy = (H - vH) / 2;
-    return { x: Math.max(-maxOx, Math.min(maxOx, ox)), y: Math.max(-maxOy, Math.min(maxOy, oy)) };
-  }, [W, H]);
+  const boxData = SUB_KEYS.map((key) => {
+    const trackers = PLANT[key].t;
+    const stat = countDone(statuses, key, trackers, activeLayer);
+    const pct = stat.total ? stat.done / stat.total : 0;
 
-  const handleWheel = useCallback((e) => {
-    e.preventDefault();
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const mx = (e.clientX - rect.left) / rect.width;
-    const my = (e.clientY - rect.top) / rect.height;
-    setZoom((z) => {
-      const newZ = Math.max(1, Math.min(10, z * (e.deltaY < 0 ? 1.15 : 1 / 1.15)));
-      const vW = W / z, vH = H / z;
-      const nvW = W / newZ, nvH = H / newZ;
-      setOffset((o) => clampOffset(
-        o.x + (nvW - vW) * (0.5 - mx),
-        o.y + (nvH - vH) * (0.5 - my),
-        newZ,
-      ));
-      return newZ;
+    const pixPoly = SUBCAMPO_POLY_LL[key].map((ll) => {
+      const p = toPixel(ll);
+      return { x: p.x, y: p.y };
     });
-  }, [W, H, clampOffset]);
+    const hullStr = pixPoly.map((p) => `${p.x},${p.y}`).join(" ");
 
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.addEventListener("wheel", handleWheel, { passive: false });
-    return () => el.removeEventListener("wheel", handleWheel);
-  }, [handleWheel]);
+    const xs = pixPoly.map((p) => p.x), ys = pixPoly.map((p) => p.y);
+    const bx = Math.min(...xs), by = Math.min(...ys);
+    const bw = Math.max(...xs) - bx, bh = Math.max(...ys) - by;
+    const cx = bx + bw / 2, cy = by + bh / 2;
 
-  const handleMouseDown = useCallback((e) => {
-    if (zoom <= 1) return;
-    e.preventDefault();
-    dragRef.current = { startX: e.clientX, startY: e.clientY, ox: offset.x, oy: offset.y };
-  }, [zoom, offset]);
+    const avgHeat = heatmap
+      ? trackers.reduce((s, [n]) => s + (LAYER_PCT[activeLayer]?.[getStatus(statuses, key, n)[idx]] ?? 0), 0) / (trackers.length || 1)
+      : 0;
 
-  const handleMouseMove = useCallback((e) => {
-    if (!dragRef.current) return;
-    const el = containerRef.current;
-    if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const vW = W / zoom, vH = H / zoom;
-    const dx = (e.clientX - dragRef.current.startX) / rect.width * vW;
-    const dy = (e.clientY - dragRef.current.startY) / rect.height * vH;
-    setOffset(clampOffset(dragRef.current.ox - dx, dragRef.current.oy - dy, zoom));
-  }, [zoom, W, H, clampOffset]);
+    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat };
+  });
 
-  const handleMouseUp = useCallback(() => { dragRef.current = null; }, []);
+  const fPct = heatmap
+    ? boxData.reduce((m, { bw, bh }) => Math.min(m, bh * 0.28, bw * 0.30), Infinity)
+    : 16;
+  const fName = fPct * 0.80;
+  const sw = Math.max(0.5, fPct * 0.05);
 
-  useEffect(() => {
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mouseup", handleMouseUp);
-    };
-  }, [handleMouseMove, handleMouseUp]);
+  const trackerDots = (!heatmap && zoom >= 16)
+    ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, ll }) => {
+        const pt = toPixel(ll);
+        const val = getStatus(statuses, key, n)[idx];
+        return { key, n, pt, val };
+      }))
+    : [];
 
-  const vW = W / zoom, vH = H / zoom;
-  const vX = (W - vW) / 2 + offset.x, vY = (H - vH) / 2 + offset.y;
+  return createPortal(
+    <svg
+      width={size.x} height={size.y}
+      style={{ position: "absolute", top: 0, left: 0, zIndex: 500, pointerEvents: "none" }}
+    >
+      {heatmap ? (
+        <>
+          {boxData.map(({ key, hullStr, avgHeat }) => (
+            <polygon key={key + "-r"} points={hullStr}
+              fill={heatColor(avgHeat)} opacity={0.88}
+              style={{ pointerEvents: "auto", cursor: "pointer" }} onClick={() => onSelect(key)} />
+          ))}
+          {boxData.map(({ key, cx, cy, avgHeat }) => (
+            <g key={key + "-t"} style={{ pointerEvents: "none" }}>
+              <text x={cx} y={cy - fPct * 0.30} fontSize={fName} fill="#fff" fontFamily="monospace"
+                fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
+                SDM {key}
+              </text>
+              <text x={cx} y={cy + fPct * 0.48} fontSize={fPct} fill="#fff" fontFamily="monospace"
+                fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                stroke="rgba(0,0,0,0.7)" strokeWidth={sw * 1.5} paintOrder="stroke">
+                {Math.round(avgHeat * 100)}%
+              </text>
+            </g>
+          ))}
+        </>
+      ) : (
+        <>
+          {/* Pass 1: polygon fills + borders (clickable) */}
+          {boxData.map(({ key, pct, hullStr }) => (
+            <polygon key={key + "-fill"} points={hullStr}
+              fill="rgba(16,23,41,0.72)" stroke={pct === 1 ? P.done : P.border} strokeWidth={2}
+              style={{ cursor: "pointer", pointerEvents: "auto" }} onClick={() => onSelect(key)} />
+          ))}
+          {/* Pass 2: tracker dots */}
+          {trackerDots.map(({ key, n, pt, val }) => (
+            <rect key={key + "-" + n}
+              x={pt.x - 4} y={pt.y - 9} width={8} height={18} rx={2}
+              fill={STATE_COLORS[activeLayer][val]} opacity={0.95}
+              style={{ pointerEvents: "none" }} />
+          ))}
+          {/* Pass 3: labels always on top of everything */}
+          {boxData.map(({ key, bw, bh, cx, cy }) => bw > 24 && bh > 18 && (
+            <text key={key + "-lbl"} x={cx} y={cy} fontSize={12} fill="#fff" fontFamily="monospace"
+              fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+              stroke="rgba(0,0,0,0.9)" strokeWidth={3} paintOrder="stroke"
+              style={{ pointerEvents: "none" }}>
+              SDM {key}
+            </text>
+          ))}
+        </>
+      )}
+    </svg>,
+    map.getContainer()
+  );
+}
 
+function ZoomWatcher({ onZoom }) {
+  useMapEvents({ zoomend: (e) => onZoom(e.target.getZoom()) });
+  return null;
+}
+
+function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange }) {
   return (
-    <div ref={containerRef} onMouseDown={handleMouseDown} style={{
+    <div style={{
       flex: 1, minHeight: 0, position: "relative",
-      background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12, padding: 12,
-      overflow: "hidden", cursor: zoom > 1 ? (dragRef.current ? "grabbing" : "grab") : "default",
-      userSelect: "none",
+      borderRadius: 12, overflow: "hidden", border: `1px solid ${P.border}`,
     }}>
-      <button onClick={() => setHeatmap((h) => !h)} style={{
-        position: "absolute", top: 10, left: 10, zIndex: 2,
-        background: heatmap ? P.accentG : P.card, border: `1px solid ${heatmap ? P.accent : P.border}`,
-        color: heatmap ? P.accent : P.muted, borderRadius: 7, padding: "5px 11px",
-        fontSize: 11.5, cursor: "pointer", fontFamily: "inherit", fontWeight: 600,
-      }}>
-        {heatmap ? "◉ Heatmap" : "○ Heatmap"}
-      </button>
+      <MapContainer
+        center={PLANT_CENTER_LL} zoom={15}
+        style={{ width: "100%", height: "100%" }}
+        zoomControl={true} attributionControl={false}
+      >
+        <TileLayer
+          url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+          maxZoom={20} maxNativeZoom={19}
+        />
+        <ZoomWatcher onZoom={onZoomChange} />
+        <PlantLayer
+          statuses={statuses} activeLayer={activeLayer}
+          onSelect={onSelect} heatmap={heatmap}
+        />
+      </MapContainer>
       {heatmap && (
         <div style={{
-          position: "absolute", top: 10, right: 10, zIndex: 2,
+          position: "absolute", top: 10, right: 10, zIndex: 1000,
           background: "rgba(13,15,20,0.9)", border: `1px solid ${P.border}`,
-          borderRadius: 8, padding: "8px 10px",
+          borderRadius: 8, padding: "8px 10px", pointerEvents: "none",
         }}>
           <div style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>LEGENDA:</div>
           <div style={{ display: "flex", gap: 7, alignItems: "stretch" }}>
@@ -621,61 +793,6 @@ function OverviewMap({ statuses, activeLayer, onSelect }) {
           </div>
         </div>
       )}
-      <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block" }}>
-        {subBoxes.map((b) => {
-          const trackers = PLANT[b.key].t;
-          const stat = countDone(statuses, b.key, trackers, activeLayer);
-          const pct = stat.total ? stat.done / stat.total : 0;
-          const bx = toX(b.minX) - 14, by = toY(b.maxY) - 14;
-          const bw = (b.maxX - b.minX) + 28, bh = (b.maxY - b.minY) + 28;
-
-          if (heatmap) {
-            const avgHeat = trackers.reduce((s, [n]) => {
-              const v = getStatus(statuses, b.key, n)[idx];
-              return s + (LAYER_PCT[activeLayer]?.[v] ?? 0);
-            }, 0) / (trackers.length || 1);
-            const cx = bx + bw / 2, cy = by + bh / 2;
-            const fPct = Math.min(bh * 0.14, bw * 0.22);
-            const fName = fPct * 0.55;
-            const sw = fPct * 0.04;
-            return (
-              <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
-                <rect x={bx} y={by} width={bw} height={bh} rx={10} fill={heatColor(avgHeat)} />
-                <text x={cx} y={cy - fPct * 0.2} fontSize={fName} fill="#fff" fontFamily="monospace"
-                  fontWeight="600" textAnchor="middle" dominantBaseline="middle"
-                  stroke="rgba(0,0,0,0.5)" strokeWidth={sw} paintOrder="stroke">
-                  SDM {b.key}
-                </text>
-                <text x={cx} y={cy + fPct * 0.55} fontSize={fPct} fill="#fff" fontFamily="monospace"
-                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
-                  stroke="rgba(0,0,0,0.5)" strokeWidth={sw * 1.5} paintOrder="stroke">
-                  {Math.round(avgHeat * 100)}%
-                </text>
-              </g>
-            );
-          }
-
-          return (
-            <g key={b.key} style={{ cursor: "pointer" }} onClick={() => onSelect(b.key)}>
-              <rect x={bx} y={by} width={bw} height={bh} rx={10}
-                fill={P.card} stroke={pct === 1 ? P.accent : P.border} strokeWidth={2} opacity={0.9} />
-              <rect x={bx} y={by - 38} width={bw} height={34} rx={8}
-                fill={P.bg} stroke={pct === 1 ? P.accent : P.border} strokeWidth={1.5} opacity={0.95} />
-              <text x={bx + 10} y={by - 22} fontSize={14} fill={P.text} fontFamily="monospace" fontWeight="700">SDM {b.key}</text>
-              <text x={bx + 10} y={by - 8} fontSize={11} fill={pct === 1 ? P.accent : P.muted} fontFamily="monospace">{stat.done}/{stat.total} · {Math.round(pct * 100)}%</text>
-            </g>
-          );
-        })}
-        {!heatmap && all.map((p) => {
-          const val = getStatus(statuses, p.key, p.n)[idx];
-          return (
-            <rect key={p.key + "-" + p.n}
-              x={toX(p.x) - markerW / 2} y={toY(p.y) - markerH / 2}
-              width={markerW} height={markerH} rx={2}
-              fill={STATE_COLORS[activeLayer][val]} opacity={0.95} style={{ pointerEvents: "none" }} />
-          );
-        })}
-      </svg>
     </div>
   );
 }
@@ -709,7 +826,10 @@ const STORAGE_ROW_ID = "sdm_tracker_status_v1";
 
 export default function App() {
   const [view, setView] = useState("overview");
-  const [activeLayer, setActiveLayer] = useState("lavagem");
+  const [activeLayer, setActiveLayerRaw] = useState("lavagem");
+  const [heatmap, setHeatmap] = useState(false);
+  const setActiveLayer = (layer) => { if (layer === "trator" || layer === "trackers") setHeatmap(false); setActiveLayerRaw(layer); };
+  const [mapZoom, setMapZoom] = useState(15);
   const [statuses, setStatuses] = useState({});
   const [loaded, setLoaded] = useState(false);
   const [syncState, setSyncState] = useState("loading"); // loading | ok | saving | error | offline
@@ -813,10 +933,22 @@ export default function App() {
       `}</style>
 
       <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-        <div style={{ marginBottom: 8, flexShrink: 0 }}>
-          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: P.accentG,
-            border: `1px solid ${P.accent}33`, borderRadius: 6, padding: "4px 14px" }}>
-            <span style={{ color: P.accent, fontSize: 11, fontFamily: "monospace", letterSpacing: 1 }}>UFV SDM · STATUS DE CAMPO</span>
+        <div style={{
+          display: "flex", alignItems: "center", gap: 16, marginBottom: 10, flexShrink: 0,
+          background: P.navy, borderRadius: 10, padding: "8px 16px",
+          border: `1px solid ${P.accent}33`,
+        }}>
+          <img src="/logo-airbox.jpg" alt="Airbox" style={{ height: 32, borderRadius: 4, flexShrink: 0 }} />
+          <div style={{ width: 1, height: 28, background: `${P.accent}44`, flexShrink: 0 }} />
+          <div>
+            <div style={{ color: P.accent, fontSize: 13, fontWeight: 700, letterSpacing: 0.5, lineHeight: 1.2 }}>
+              UFV SDM — Serra do Mato
+            </div>
+            <div style={{ color: P.muted, fontSize: 10, letterSpacing: 1, fontFamily: "monospace" }}>
+              CONTROLE DE MANUTENÇÃO
+            </div>
+          </div>
+          <div style={{ marginLeft: "auto" }}>
             <SyncBadge state={syncState} />
           </div>
         </div>
@@ -825,25 +957,42 @@ export default function App() {
           <div style={{ color: P.muted, fontSize: 13 }}>Carregando status salvo...</div>
         ) : view === "overview" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
               <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-              <div style={{ flex: 1, minWidth: 160 }}>
-                <ProgressBar done={globalStat.done} prog={globalStat.prog} total={globalStat.total} color={STATE_COLORS[activeLayer][LAYER_DONE_IDX[activeLayer]]} />
-              </div>
-              <span style={{ fontFamily: "monospace", fontSize: 12, color: STATE_COLORS[activeLayer][LAYER_DONE_IDX[activeLayer]], fontWeight: 700 }}>
-                ✓ {globalStat.done}
-              </span>
-              {globalStat.prog > 0 && (
-                <span style={{ fontFamily: "monospace", fontSize: 12, color: P.warn, fontWeight: 700 }}>
-                  ½ {globalStat.prog}
-                </span>
+              {activeLayer !== "trator" && activeLayer !== "trackers" && (
+                <button onClick={() => setHeatmap((h) => !h)} style={{
+                  padding: "4px 10px", borderRadius: 7,
+                  border: `1px solid ${heatmap ? P.accent + "55" : P.border}`,
+                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                  background: heatmap ? P.accent : "transparent",
+                  color: heatmap ? "#111827" : P.muted, transition: "all .12s",
+                }}>
+                  Heatmap
+                </button>
               )}
-              <span style={{ fontFamily: "monospace", fontSize: 12, color: P.muted }}>
-                /{globalStat.total} trackers
-              </span>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: "auto" }}>
+                <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
+                  padding: "4px 10px", borderRadius: 7,
+                  border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
+                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                  background: activeLayer === "trator" ? P.warn + "22" : "transparent",
+                  color: activeLayer === "trator" ? P.warn : P.muted, transition: "all .12s",
+                }}>
+                  Acesso trator
+                </button>
+                <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
+                  padding: "4px 10px", borderRadius: 7,
+                  border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
+                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                  background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
+                  color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
+                }}>
+                  Trackers
+                </button>
+              </div>
             </div>
-            <Legend activeLayer={activeLayer} />
-            <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} />
+            {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && <Legend activeLayer={activeLayer} />}
+            <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} heatmap={heatmap} onZoomChange={setMapZoom} />
           </div>
         ) : (
           <div style={{ flex: 1, minHeight: 0 }}>
