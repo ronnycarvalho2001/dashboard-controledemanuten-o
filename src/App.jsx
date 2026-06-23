@@ -25,18 +25,27 @@ const LAYERS = [
   { key: "rocagem", label: "Roçagem",
     states: ["Pendente", "Incompleto", "Concluída", "Não Classificado"],
     doneIdx: 2, progIdxes: [1], doneAliases: [3] },
-  { key: "pragas", label: "Controle de Pragas",
+  { key: "pragas_c1", label: "Pragas — Ciclo 1", tabLabel: "Controle de Pragas",
     states: ["Pendente", "Aplicação concluída"],
-    doneIdx: 1, progIdxes: [] },
+    doneIdx: 1, progIdxes: [], group: "pragas" },
   { key: "trator", label: "Acesso trator",
     states: ["Não avaliado", "Bloqueado", "Liberado"],
     doneIdx: 2, progIdxes: [1], small: true },
   { key: "trackers", label: "Trackers",
     states: ["OK", "Alarme de Falha", "Sem Comunicação", "Indefinido"],
     doneIdx: 0, progIdxes: [], small: true },
+  { key: "pragas_c2", label: "Pragas — Ciclo 2",
+    states: ["Pendente", "Aplicação concluída"],
+    doneIdx: 1, progIdxes: [], group: "pragas", hidden: true },
 ];
-const LAYER_IDX = { lavagem: 0, rocagem: 1, pragas: 2, trator: 3, trackers: 4 };
+const LAYER_IDX = { lavagem: 0, rocagem: 1, pragas_c1: 2, trator: 3, trackers: 4, pragas_c2: 5 };
 const LAYER_DONE_IDX = Object.fromEntries(LAYERS.map((l) => [l.key, l.doneIdx]));
+const FOCO_TYPES = [
+  { key: "formigas", label: "Formigas" },
+  { key: "ratos", label: "Ratos" },
+];
+const FOCO_LEVELS = ["Sem foco", "Baixo", "Médio", "Alto", "Crítico"];
+const FOCO_COLORS = ["transparent", "#facc15", "#ff9b3d", "#ff5f3d", "#dc2626"];
 
 const P = {
   bg: "#0b0f1e", surface: "#101729", card: "#161e30", card2: "#1c2540", border: "#253050",
@@ -50,7 +59,8 @@ const P = {
 const STATE_COLORS = {
   lavagem: [P.danger, "#475569", P.info, P.warn, P.done, P.muted],
   rocagem: [P.border, P.warn, P.done, P.muted],
-  pragas: [P.border, P.done],
+  pragas_c1: [P.border, P.done],
+  pragas_c2: [P.border, P.done],
   trator: [P.border, P.danger, P.done],
   trackers: [P.done, P.danger, "#facc15", P.warn],
 };
@@ -61,7 +71,8 @@ const GROUP_PALETTE = ["#4da6ff", "#c084fc", "#ffb347", "#00e5a0", "#ff5f7e", "#
 const LAYER_PCT = {
   lavagem: [0, (112 - 22) / 112, (112 - 8) / 112, 0.5, 1, 1],
   rocagem: [0, 0.5, 1, 1],
-  pragas: [0, 1],
+  pragas_c1: [0, 1],
+  pragas_c2: [0, 1],
   trator: [0, 0, 1],
   trackers: [1, 0, 0, 0],
 };
@@ -126,6 +137,19 @@ function useSubGeometry(key) {
 }
 
 /* ── status helpers ──────────────────────────────────────────────────── */
+function getFoco(statuses, subKey, focoType) {
+  return (statuses._focos && statuses._focos[subKey] && statuses._focos[subKey][focoType]) || 0;
+}
+function setFocoValue(statuses, subKey, focoType, level) {
+  const focos = { ...(statuses._focos || {}) };
+  focos[subKey] = { ...(focos[subKey] || {}), [focoType]: level };
+  return { ...statuses, _focos: focos };
+}
+function focoHeatColor(level) {
+  if (level <= 0) return "transparent";
+  const colors = ["#facc15", "#ff9b3d", "#ff5f3d", "#dc2626"];
+  return colors[Math.min(level - 1, 3)];
+}
 function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
   return LAYERS.map((_, i) => arr[i] ?? 0);
@@ -178,16 +202,17 @@ function ProgressBar({ done, prog, total, color }) {
 }
 
 function LayerTabs({ active, onChange }) {
-  const main = LAYERS.filter((l) => !l.small);
+  const main = LAYERS.filter((l) => !l.small && !l.hidden);
   return (
     <div style={{
       display: "inline-flex", alignItems: "center", gap: 2,
       background: P.bg, border: `1px solid ${P.border}`, borderRadius: 10, padding: 3,
     }}>
       {main.map((l) => {
-        const on = active === l.key;
+        const isPragasGroup = l.group === "pragas";
+        const on = isPragasGroup ? (active === "pragas_c1" || active === "pragas_c2" || active === "pragas_focos") : active === l.key;
         return (
-          <button key={l.key} onClick={() => onChange(l.key)} style={{
+          <button key={l.key} onClick={() => onChange(isPragasGroup ? "pragas_c1" : l.key)} style={{
             display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
             borderRadius: 8, border: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 12.5, fontWeight: 600,
@@ -195,7 +220,57 @@ function LayerTabs({ active, onChange }) {
             color: on ? "#111827" : P.muted,
             transition: "background .12s, color .12s",
           }}>
-            {l.label}
+            {l.tabLabel || l.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PragasSubTabs({ active, onChange }) {
+  const tabs = [
+    { key: "pragas_c1", label: "Ciclo 1" },
+    { key: "pragas_c2", label: "Ciclo 2" },
+    { key: "pragas_focos", label: "Focos" },
+  ];
+  return (
+    <div style={{
+      display: "inline-flex", alignItems: "center", gap: 2,
+      background: P.bg, border: `1px solid ${P.border}`, borderRadius: 8, padding: 2,
+    }}>
+      {tabs.map((t) => {
+        const on = active === t.key;
+        return (
+          <button key={t.key} onClick={() => onChange(t.key)} style={{
+            padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+            fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+            background: on ? P.done + "22" : "transparent",
+            color: on ? P.done : P.muted,
+            transition: "all .12s",
+          }}>
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FocoTypeChips({ active, onChange }) {
+  return (
+    <div style={{ display: "inline-flex", gap: 2, background: P.bg, border: `1px solid ${P.border}`, borderRadius: 8, padding: 2 }}>
+      {FOCO_TYPES.map((f) => {
+        const on = active === f.key;
+        return (
+          <button key={f.key} onClick={() => onChange(f.key)} style={{
+            padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
+            fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+            background: on ? P.warn + "22" : "transparent",
+            color: on ? P.warn : P.muted,
+            transition: "all .12s",
+          }}>
+            {f.label}
           </button>
         );
       })}
@@ -367,7 +442,7 @@ function RangeTool({ activeLayer, onApply }) {
 /* ════════════════════════════════════════════════════════════════════════
    VISÃO DE UM SUBCAMPO
    ════════════════════════════════════════════════════════════════════════ */
-function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLayer, onNavigate, readOnly }) {
+function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLayer, onNavigate, readOnly, focoType, setFocoType }) {
   const geo = useSubGeometry(subKey);
   const [filter, setFilter] = useState(null);
   const [showGroups, setShowGroups] = useState(true);
@@ -449,6 +524,12 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
         <LayerTabs active={activeLayer} onChange={setActiveLayer} />
+        {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || activeLayer === "pragas_focos") && (
+          <>
+            <PragasSubTabs active={activeLayer} onChange={setActiveLayer} />
+            {activeLayer === "pragas_focos" && <FocoTypeChips active={focoType} onChange={setFocoType} />}
+          </>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
             padding: "4px 10px", borderRadius: 7,
@@ -471,6 +552,36 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </div>
       </div>
 
+      {activeLayer === "pragas_focos" ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, flex: 1, minHeight: 0 }}>
+          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
+            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 12, letterSpacing: 0.5 }}>
+              NÍVEL DE FOCO — {focoType.toUpperCase()} — SDM {subKey}
+            </div>
+            {FOCO_LEVELS.map((level, i) => {
+              const currentLevel = getFoco(statuses, subKey, focoType);
+              const on = currentLevel === i;
+              return (
+                <button key={i} onClick={() => { if (!readOnly) setStatuses((prev) => setFocoValue(prev, subKey, focoType, i)); }}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "10px 14px",
+                    marginBottom: 6, borderRadius: 10, cursor: readOnly ? "default" : "pointer",
+                    border: `1.5px solid ${on ? (FOCO_COLORS[i] || P.border) + "88" : P.border}`,
+                    background: on ? (FOCO_COLORS[i] || P.border) + "18" : "transparent",
+                    fontFamily: "inherit", fontSize: 13, fontWeight: on ? 700 : 500,
+                    color: on ? (i === 0 ? P.done : FOCO_COLORS[i]) : P.muted,
+                    transition: "all .12s",
+                  }}>
+                  {i > 0 && <div style={{ width: 10, height: 10, borderRadius: "50%", background: FOCO_COLORS[i], flexShrink: 0 }} />}
+                  {i === 0 && <div style={{ width: 10, height: 10, borderRadius: "50%", background: P.done, flexShrink: 0, opacity: 0.5 }} />}
+                  {level}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, flexShrink: 0 }}>
         <FilterChips activeLayer={activeLayer} filter={filter} onChange={setFilter} />
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: P.muted, cursor: "pointer" }}>
@@ -516,12 +627,13 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
               {selected != null ? (
                 <div>
                   <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 8, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
-                  {LAYERS.map((l, i) => {
-                    const stateColor = STATE_COLORS[l.key][selStatus[i]];
+                  {LAYERS.filter((l) => !l.hidden).map((l, i) => {
+                    const li = LAYERS.indexOf(l);
+                    const stateColor = STATE_COLORS[l.key][selStatus[li]];
                     return (
                       <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                         <span style={{ fontSize: 11, color: P.muted, width: 96, fontFamily: "inherit" }}>{l.label}</span>
-                        <button onClick={() => applyToTrackers([selected], (selStatus[i] + 1) % LAYERS[i].states.length)} style={{
+                        <button onClick={() => applyToTrackers([selected], (selStatus[li] + 1) % l.states.length)} style={{
                           display: "flex", alignItems: "center", gap: 5,
                           background: stateColor + "1e", border: `1px solid ${stateColor}55`,
                           color: stateColor, borderRadius: 99, padding: "4px 11px",
@@ -529,7 +641,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                           transition: "all .12s",
                         }}>
                           <div style={{ width: 6, height: 6, borderRadius: "50%", background: stateColor, flexShrink: 0 }} />
-                          {l.states[selStatus[i]]}
+                          {l.states[selStatus[li]]}
                         </button>
                       </div>
                     );
@@ -559,6 +671,8 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           <Legend activeLayer={activeLayer} />
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -653,12 +767,14 @@ const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
   return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
 }));
 
-function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
+function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType }) {
   const map = useMap();
   const [, tick] = useReducer((n) => n + 1, 0);
   useMapEvents({ move: tick, zoom: tick, resize: tick });
 
-  const idx = LAYER_IDX[activeLayer];
+  const isFocos = activeLayer === "pragas_focos";
+  const realLayer = isFocos ? "pragas_c1" : activeLayer;
+  const idx = LAYER_IDX[realLayer];
   const size = map.getSize();
   const zoom = map.getZoom();
 
@@ -666,7 +782,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
 
   const boxData = SUB_KEYS.map((key) => {
     const trackers = PLANT[key].t;
-    const stat = countDone(statuses, key, trackers, activeLayer);
+    const stat = isFocos ? { done: 0, prog: 0, total: 0, pending: 0 } : countDone(statuses, key, trackers, realLayer);
     const pct = stat.total ? stat.done / stat.total : 0;
 
     const pixPoly = SUBCAMPO_POLY_LL[key].map((ll) => {
@@ -681,10 +797,12 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
     const cx = bx + bw / 2, cy = by + bh / 2;
 
     const avgHeat = heatmap
-      ? trackers.reduce((s, [n]) => s + (LAYER_PCT[activeLayer]?.[getStatus(statuses, key, n)[idx]] ?? 0), 0) / (trackers.length || 1)
+      ? trackers.reduce((s, [n]) => s + (LAYER_PCT[realLayer]?.[getStatus(statuses, key, n)[idx]] ?? 0), 0) / (trackers.length || 1)
       : 0;
 
-    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat };
+    const focoLevel = isFocos ? getFoco(statuses, key, focoType) : 0;
+
+    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoLevel };
   });
 
   const fPct = heatmap
@@ -693,7 +811,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
   const fName = fPct * 0.80;
   const sw = Math.max(0.5, fPct * 0.05);
 
-  const trackerDots = (!heatmap && zoom >= 16)
+  const trackerDots = (!isFocos && !heatmap && zoom >= 16)
     ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, ll }) => {
         const pt = toPixel(ll);
         const val = getStatus(statuses, key, n)[idx];
@@ -706,7 +824,33 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
       width={size.x} height={size.y}
       style={{ position: "absolute", top: 0, left: 0, zIndex: 500, pointerEvents: "none" }}
     >
-      {heatmap ? (
+      {isFocos ? (
+        <>
+          {boxData.map(({ key, hullStr, focoLevel, cx, cy, bw, bh }) => (
+            <g key={key}>
+              <polygon points={hullStr}
+                fill={focoLevel > 0 ? focoHeatColor(focoLevel) : "rgba(16,23,41,0.72)"}
+                opacity={focoLevel > 0 ? 0.75 : 0.72}
+                stroke={focoLevel > 0 ? focoHeatColor(focoLevel) : P.border} strokeWidth={2}
+                style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
+              {bw > 24 && bh > 18 && (
+                <text x={cx} y={cy - 6} fontSize={fName} fill="#fff" fontFamily="monospace"
+                  fontWeight="700" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
+                  SDM {key}
+                </text>
+              )}
+              {focoLevel > 0 && bw > 24 && (
+                <text x={cx} y={cy + fName * 0.7} fontSize={fName * 0.7} fill="#fff" fontFamily="monospace"
+                  fontWeight="600" textAnchor="middle" dominantBaseline="middle"
+                  stroke="rgba(0,0,0,0.7)" strokeWidth={sw} paintOrder="stroke">
+                  {FOCO_LEVELS[focoLevel]}
+                </text>
+              )}
+            </g>
+          ))}
+        </>
+      ) : heatmap ? (
         <>
           {boxData.map(({ key, hullStr, avgHeat }) => (
             <polygon key={key + "-r"} points={hullStr}
@@ -730,7 +874,6 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap }) {
         </>
       ) : (
         <>
-          {/* Pass 1: polygon fills + borders (clickable) */}
           {boxData.map(({ key, pct, hullStr }) => (
             <polygon key={key + "-fill"} points={hullStr}
               fill="rgba(16,23,41,0.72)" stroke={pct === 1 ? P.done : P.border} strokeWidth={2}
@@ -764,7 +907,7 @@ function ZoomWatcher({ onZoom }) {
   return null;
 }
 
-function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange }) {
+function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, focoType }) {
   return (
     <div style={{
       flex: 1, minHeight: 0, position: "relative",
@@ -783,7 +926,7 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange })
         <ZoomWatcher onZoom={onZoomChange} />
         <PlantLayer
           statuses={statuses} activeLayer={activeLayer}
-          onSelect={onSelect} heatmap={heatmap}
+          onSelect={onSelect} heatmap={heatmap} focoType={focoType}
         />
       </MapContainer>
       {heatmap && (
@@ -981,7 +1124,11 @@ export default function App() {
   const [view, setView] = useState("overview");
   const [activeLayer, setActiveLayerRaw] = useState("lavagem");
   const [heatmap, setHeatmap] = useState(false);
-  const setActiveLayer = (layer) => { if (layer === "trator" || layer === "trackers") setHeatmap(false); setActiveLayerRaw(layer); };
+  const [focoType, setFocoType] = useState("formigas");
+  const setActiveLayer = (layer) => {
+    if (layer === "trator" || layer === "trackers" || layer === "pragas_focos") setHeatmap(false);
+    setActiveLayerRaw(layer);
+  };
   const [mapZoom, setMapZoom] = useState(15);
   const [statuses, setStatuses] = useState({});
   const [loaded, setLoaded] = useState(false);
@@ -1067,10 +1214,13 @@ export default function App() {
   }, [statuses, loaded]);
 
   const globalStat = useMemo(() => {
+    if (activeLayer === "pragas_focos") return { done: 0, prog: 0, total: 0 };
+    const realLayer = activeLayer;
     const allPoints = SUB_KEYS.flatMap((k) => PLANT[k].t.map((t) => ({ key: k, n: t[0] })));
-    const idx = LAYER_IDX[activeLayer];
+    const idx = LAYER_IDX[realLayer];
     let done = 0, prog = 0;
-    const layer = LAYERS.find((l) => l.key === activeLayer);
+    const layer = LAYERS.find((l) => l.key === realLayer);
+    if (!layer) return { done: 0, prog: 0, total: allPoints.length };
     allPoints.forEach((p) => {
       const v = getStatus(statuses, p.key, p.n)[idx];
       if (v === layer.doneIdx) done++;
@@ -1137,7 +1287,13 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
               <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-              {activeLayer !== "trator" && activeLayer !== "trackers" && (
+              {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || activeLayer === "pragas_focos") && (
+                <>
+                  <PragasSubTabs active={activeLayer} onChange={setActiveLayer} />
+                  {activeLayer === "pragas_focos" && <FocoTypeChips active={focoType} onChange={setFocoType} />}
+                </>
+              )}
+              {activeLayer !== "trator" && activeLayer !== "trackers" && activeLayer !== "pragas_focos" && (
                 <button onClick={() => setHeatmap((h) => !h)} style={{
                   padding: "4px 10px", borderRadius: 7,
                   border: `1px solid ${heatmap ? P.accent + "55" : P.border}`,
@@ -1169,14 +1325,26 @@ export default function App() {
                 </button>
               </div>
             </div>
-            {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && <Legend activeLayer={activeLayer} />}
-            <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} heatmap={heatmap} onZoomChange={setMapZoom} />
+            {activeLayer === "pragas_focos" && (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                {FOCO_LEVELS.map((l, i) => i > 0 && (
+                  <div key={l} style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: FOCO_COLORS[i] }} />
+                    <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "monospace" }}>{l}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && activeLayer !== "pragas_focos" && <Legend activeLayer={activeLayer} />}
+            <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} heatmap={heatmap} onZoomChange={setMapZoom}
+              focoType={focoType} />
           </div>
         ) : (
           <div style={{ flex: 1, minHeight: 0 }}>
             <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatusesByUser}
               activeLayer={activeLayer} setActiveLayer={setActiveLayer}
-              onNavigate={(key) => setView(key || "overview")} readOnly={readOnly} />
+              onNavigate={(key) => setView(key || "overview")} readOnly={readOnly}
+              focoType={focoType} setFocoType={setFocoType} />
           </div>
         )}
       </div>
