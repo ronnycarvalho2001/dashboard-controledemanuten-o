@@ -947,7 +947,7 @@ function LoginScreen({ onLogin }) {
 }
 
 export default function App() {
-  const [auth, setAuth] = useState(null); // null = login screen, true = admin, false = visitor
+  const [auth, setAuth] = useState(null); // null = login, "loading" = spinner, true = admin, false = visitor
   const [dashVisible, setDashVisible] = useState(false);
   const readOnly = auth !== true;
   const [view, setView] = useState("overview");
@@ -957,14 +957,19 @@ export default function App() {
   const [mapZoom, setMapZoom] = useState(15);
   const [statuses, setStatuses] = useState({});
   const [loaded, setLoaded] = useState(false);
-  const [syncState, setSyncState] = useState("loading"); // loading | ok | saving | error | offline
+  const [syncState, setSyncState] = useState("loading");
   const saveTimer = useRef(null);
   const skipNextRealtime = useRef(false);
   const userDirty = useRef(false);
+  const pendingAuth = useRef(null);
 
   const handleLogin = useCallback((isAdmin) => {
-    setAuth(isAdmin);
-    setTimeout(() => setDashVisible(true), 50);
+    pendingAuth.current = isAdmin;
+    setAuth("loading");
+    setTimeout(() => {
+      setAuth(isAdmin);
+      setTimeout(() => setDashVisible(true), 80);
+    }, 1800);
   }, []);
 
   const setStatusesByUser = useCallback((updater) => {
@@ -1046,7 +1051,7 @@ export default function App() {
     return { done, prog, total: allPoints.length };
   }, [statuses, activeLayer]);
 
-  if (auth === null) {
+  if (auth === null || auth === "loading") {
     return (
       <>
         <style>{`
@@ -1056,8 +1061,36 @@ export default function App() {
           input, button { font-family: inherit; }
           button:hover { filter: brightness(1.12); }
           @keyframes shake{0%,100%{transform:translateX(0) translateY(-50%)}20%,60%{transform:translateX(-6px) translateY(-50%)}40%,80%{transform:translateX(6px) translateY(-50%)}}
+          @keyframes dotPulse{0%,80%,100%{opacity:.2;transform:scale(.7)}40%{opacity:1;transform:scale(1)}}
         `}</style>
-        <LoginScreen onLogin={handleLogin} />
+        {auth === null && <LoginScreen onLogin={handleLogin} />}
+        {auth === "loading" && (
+          <div style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 24,
+          }}>
+            <div style={{
+              position: "absolute", inset: 0,
+              backgroundImage: 'url("/WhatsApp Image 2026-06-23 at 10.44.57.jpeg")',
+              backgroundSize: "cover", backgroundPosition: "center",
+              filter: "brightness(0.35)",
+            }} />
+            <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 20 }}>
+              <div style={{ display: "flex", gap: 10 }}>
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <div key={i} style={{
+                    width: 12, height: 12, borderRadius: "50%", background: "#F5D200",
+                    animation: "dotPulse 1.4s ease-in-out infinite",
+                    animationDelay: `${i * 0.16}s`,
+                  }} />
+                ))}
+              </div>
+              <div style={{ color: "rgba(245,210,0,0.7)", fontSize: 11, fontFamily: "monospace", letterSpacing: 2 }}>
+                CARREGANDO
+              </div>
+            </div>
+          </div>
+        )}
       </>
     );
   }
