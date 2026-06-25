@@ -68,9 +68,9 @@ const P = {
 
 const STATE_COLORS = {
   lavagem: [P.danger, "#475569", P.info, P.warn, P.done, P.muted],
-  rocagem: [P.border, P.warn, P.done, P.muted],
-  pragas_c1: [P.border, P.done],
-  pragas_c2: [P.border, P.done],
+  rocagem: [P.danger, P.warn, P.done, P.muted],
+  pragas_c1: [P.danger, P.done],
+  pragas_c2: [P.danger, P.done],
   trator: [P.border, P.danger, P.done],
   trackers: [P.done, P.danger, "#facc15", P.warn],
 };
@@ -1034,6 +1034,23 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, f
           </div>
         </div>
       )}
+      {isFocosLayer(activeLayer) && (
+        <div style={{
+          position: "absolute", top: 10, right: 10, zIndex: 1000,
+          background: "rgba(13,15,20,0.9)", border: `1px solid ${P.border}`,
+          borderRadius: 8, padding: "8px 10px", pointerEvents: "none",
+        }}>
+          <div style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>ESCALA:</div>
+          <div style={{ display: "flex", gap: 7, alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Menor</span>
+            <div style={{
+              width: 80, height: 8, borderRadius: 4,
+              background: "linear-gradient(to right, #facc15, #ff9b3d, #fa3d2d)",
+            }} />
+            <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Maior</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1414,16 +1431,6 @@ export default function App() {
                 </button>
               </div>
             </div>
-            {isFocosLayer(activeLayer) && (
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Menor</span>
-                <div style={{
-                  width: 100, height: 8, borderRadius: 4,
-                  background: "linear-gradient(to right, #facc15, #ff9b3d, #fa3d2d)",
-                }} />
-                <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Maior</span>
-              </div>
-            )}
             {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
             <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} heatmap={heatmap} onZoomChange={setMapZoom}
               focoType={focoType} focoVisit={focoVisit} />
