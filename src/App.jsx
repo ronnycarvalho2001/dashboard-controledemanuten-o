@@ -1106,6 +1106,7 @@ function LoginOverlay({ phase, onLogin }) {
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 9999,
+      background: "#0b0f1e",
       opacity: fading ? 0 : 1,
       transition: "opacity 0.8s ease",
       pointerEvents: fading ? "none" : "auto",
