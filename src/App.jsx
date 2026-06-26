@@ -237,8 +237,11 @@ function LayerTabs({ active, onChange }) {
   );
 }
 
-function PragasSubTabs({ active, onChange }) {
-  const tabs = [
+function PragasSubTabs({ active, onChange, readOnly }) {
+  const tabs = readOnly ? [
+    { key: "pragas_c1", label: "Ciclo 1" },
+    { key: "pragas_c2", label: "Ciclo 2" },
+  ] : [
     { key: "pragas_c1", label: "Ciclo 1" },
     { key: "pragas_focos_c1", label: "Focos C1", accent: true },
     { key: "pragas_c2", label: "Ciclo 2" },
@@ -893,7 +896,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   const fName = fPct * 0.80;
   const sw = Math.max(0.5, fPct * 0.05);
 
-  const trackerDots = (!isFocos && !heatmap && zoom >= 16)
+  const trackerDots = (!isFocos && !heatmap && zoom >= 14)
     ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, ll }) => {
         const pt = toPixel(ll);
         const val = getStatus(statuses, key, n)[idx];
@@ -1242,6 +1245,10 @@ export default function App() {
 
   const handleLogin = useCallback((isAdmin) => {
     setReadOnly(!isAdmin);
+    if (!isAdmin) {
+      setHeatmap(true);
+      setActiveLayerRaw("lavagem");
+    }
     setOverlayPhase("loading");
     setTimeout(() => {
       setOverlayPhase("fadeout");
@@ -1392,14 +1399,14 @@ export default function App() {
               <LayerTabs active={activeLayer} onChange={setActiveLayer} />
               {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer)) && (
                 <>
-                  <PragasSubTabs active={activeLayer} onChange={setActiveLayer} />
-                  {isFocosLayer(activeLayer) && <>
+                  <PragasSubTabs active={activeLayer} onChange={setActiveLayer} readOnly={readOnly} />
+                  {!readOnly && isFocosLayer(activeLayer) && <>
                     <FocoVisitChips active={focoVisit} onChange={setFocoVisit} />
                     <FocoTypeChips active={focoType} onChange={setFocoType} />
                   </>}
                 </>
               )}
-              {activeLayer !== "trator" && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && (
+              {!readOnly && activeLayer !== "trator" && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && (
                 <button onClick={() => setHeatmap((h) => !h)} style={{
                   padding: "4px 10px", borderRadius: 7,
                   border: `1px solid ${heatmap ? P.accent + "55" : P.border}`,
@@ -1410,29 +1417,31 @@ export default function App() {
                   Heatmap
                 </button>
               )}
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: "auto" }}>
-                <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
-                  padding: "4px 10px", borderRadius: 7,
-                  border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
-                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                  background: activeLayer === "trator" ? P.warn + "22" : "transparent",
-                  color: activeLayer === "trator" ? P.warn : P.muted, transition: "all .12s",
-                }}>
-                  Acesso trator
-                </button>
-                <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
-                  padding: "4px 10px", borderRadius: 7,
-                  border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
-                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                  background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
-                  color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
-                }}>
-                  Trackers
-                </button>
-              </div>
+              {!readOnly && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: "auto" }}>
+                  <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
+                    padding: "4px 10px", borderRadius: 7,
+                    border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
+                    cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                    background: activeLayer === "trator" ? P.warn + "22" : "transparent",
+                    color: activeLayer === "trator" ? P.warn : P.muted, transition: "all .12s",
+                  }}>
+                    Acesso trator
+                  </button>
+                  <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
+                    padding: "4px 10px", borderRadius: 7,
+                    border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
+                    cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                    background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
+                    color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
+                  }}>
+                    Trackers
+                  </button>
+                </div>
+              )}
             </div>
-            {!heatmap && mapZoom >= 16 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
-            <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={setView} heatmap={heatmap} onZoomChange={setMapZoom}
+            {!heatmap && mapZoom >= 14 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
+            <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={readOnly ? () => {} : setView} heatmap={heatmap} onZoomChange={setMapZoom}
               focoType={focoType} focoVisit={focoVisit} />
           </div>
         ) : (
