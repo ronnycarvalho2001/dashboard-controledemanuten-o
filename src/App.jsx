@@ -1244,6 +1244,14 @@ export default function App() {
   const skipNextRealtime = useRef(false);
   const userDirty = useRef(false);
 
+  const handleLogout = useCallback(() => {
+    setOverlayPhase("login");
+    setReadOnly(true);
+    setHeatmap(false);
+    setActiveLayerRaw("lavagem");
+    setView("overview");
+  }, []);
+
   const handleLogin = useCallback((isAdmin) => {
     setReadOnly(!isAdmin);
     if (!isAdmin) {
@@ -1389,6 +1397,15 @@ export default function App() {
               }}>SOMENTE VISUALIZAÇÃO</span>
             )}
             <SyncBadge state={syncState} />
+            <button onClick={handleLogout} title="Sair" style={{
+              background: "transparent", border: `1px solid ${P.border}`,
+              borderRadius: 7, padding: "4px 7px", cursor: "pointer",
+              color: P.muted, fontSize: 14, lineHeight: 1, display: "flex", alignItems: "center",
+              transition: "border-color .15s, color .15s",
+            }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = P.danger + "88"; e.currentTarget.style.color = P.danger; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = P.border; e.currentTarget.style.color = P.muted; }}
+            >⏻</button>
           </div>
         </div>
 
