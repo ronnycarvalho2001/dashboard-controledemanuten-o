@@ -896,7 +896,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   const fName = fPct * 0.80;
   const sw = Math.max(0.5, fPct * 0.05);
 
-  const trackerDots = (!isFocos && !heatmap && zoom >= 14)
+  const trackerDots = (!isFocos && !heatmap && zoom > 15)
     ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, ll }) => {
         const pt = toPixel(ll);
         const val = getStatus(statuses, key, n)[idx];
@@ -1458,7 +1458,7 @@ export default function App() {
                 </div>
               )}
             </div>
-            {!heatmap && mapZoom >= 14 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
+            {!heatmap && mapZoom > 15 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
             <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={readOnly ? () => {} : setView} heatmap={heatmap} onZoomChange={setMapZoom}
               focoType={focoType} focoVisit={focoVisit} />
           </div>
