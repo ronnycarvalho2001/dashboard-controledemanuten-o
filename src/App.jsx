@@ -32,7 +32,7 @@ const LAYERS = [
     states: ["Não avaliado", "Bloqueado", "Liberado"],
     doneIdx: 2, progIdxes: [1], small: true },
   { key: "trackers", label: "Trackers",
-    states: ["OK", "Alarme de Falha", "Sem Comunicação", "Indefinido"],
+    states: ["OK", "Alarme de Falha", "Sem Comunicação"],
     doneIdx: 0, progIdxes: [], small: true },
   { key: "pragas_c2", label: "Pragas — Ciclo 2",
     states: ["Pendente", "Aplicação concluída"],
@@ -72,7 +72,7 @@ const STATE_COLORS = {
   pragas_c1: [P.danger, P.done],
   pragas_c2: [P.danger, P.done],
   trator: [P.border, P.danger, P.done],
-  trackers: [P.done, P.danger, "#facc15", P.warn],
+  trackers: [P.done, P.danger, "#facc15"],
 };
 
 const GROUP_PALETTE = ["#4da6ff", "#c084fc", "#ffb347", "#00e5a0", "#ff5f7e", "#7dd3fc", "#fb923c", "#a3e635", "#f472b6", "#94a3b8"];
@@ -84,7 +84,7 @@ const LAYER_PCT = {
   pragas_c1: [0, 1],
   pragas_c2: [0, 1],
   trator: [0, 0, 1],
-  trackers: [1, 0, 0, 0],
+  trackers: [1, 0, 0],
 };
 function heatColor(pct) {
   const p = Math.max(0, Math.min(1, pct));
@@ -96,6 +96,12 @@ function pad3(n) { return String(n).padStart(3, "0"); }
 function trackerId(key, n) {
   const [a, b] = key.split(".");
   return `EC-${a}-${b}-TR-${pad3(n)}`;
+}
+function formatDateTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 function median(arr) {
   if (!arr.length) return null;
@@ -161,7 +167,11 @@ function isFocosLayer(layer) { return layer === "pragas_focos_c1" || layer === "
 function focoCycleKey(layer) { return layer === "pragas_focos_c2" ? "c2" : "c1"; }
 function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
-  return LAYERS.map((_, i) => arr[i] ?? 0);
+  return LAYERS.map((l, i) => Math.min(arr[i] ?? 0, l.states.length - 1));
+}
+function getActivity(statuses, subKey) {
+  const a = statuses._activity && statuses._activity[subKey];
+  return { rocagem: !!(a && a.rocagem), lavagem: !!(a && a.lavagem) };
 }
 function countDone(statuses, subKey, trackers, layerKey) {
   const idx = LAYER_IDX[layerKey];
@@ -349,6 +359,19 @@ function Legend({ activeLayer }) {
           <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>{s}</span>
         </div>
       ))}
+      {activeLayer === "trackers" && (
+        <>
+          <div style={{ width: 1, height: 12, background: P.border }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 12, height: 8, borderRadius: 2, border: `2px solid ${P.warn}`, flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>Roçagem em andamento</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 12, height: 8, borderRadius: 2, border: `2px solid ${P.info}`, flexShrink: 0 }} />
+            <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>Lavagem em andamento</span>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -848,7 +871,7 @@ const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
   return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
 }));
 
-function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVisit }) {
+function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVisit, onToggleActivity }) {
   const map = useMap();
   const [, tick] = useReducer((n) => n + 1, 0);
   useMapEvents({ move: tick, zoom: tick, resize: tick });
@@ -884,8 +907,9 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     const focoCycle = isFocos ? focoCycleKey(activeLayer) : "c1";
     const focoQty = isFocos ? getFocoQty(statuses, key, focoType, focoCycle, focoVisit) : 0;
     const focoTotal = isFocos ? getFocoTotalAll(statuses, key, focoCycle, focoVisit) : 0;
+    const activity = getActivity(statuses, key);
 
-    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoQty };
+    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoQty, activity };
   });
 
   const focoMax = isFocos ? Math.max(1, ...boxData.map((d) => d.focoQty)) : 1;
@@ -962,11 +986,30 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
         </>
       ) : (
         <>
-          {boxData.map(({ key, pct, hullStr }) => (
+          {boxData.map(({ key, hullStr }) => (
             <polygon key={key + "-fill"} points={hullStr}
-              fill="rgba(16,23,41,0.72)" stroke={pct === 1 ? P.done : P.border} strokeWidth={2}
+              fill="rgba(16,23,41,0.72)" stroke={P.border} strokeWidth={2}
               style={{ cursor: "pointer", pointerEvents: "auto" }} onDoubleClick={() => onSelect(key)} />
           ))}
+          {/* Contorno de atividade (roçagem/lavagem em andamento) — apenas na aba Trackers */}
+          {activeLayer === "trackers" && boxData.map(({ key, hullStr, activity }) => {
+            if (!activity.rocagem && !activity.lavagem) return null;
+            if (activity.rocagem && activity.lavagem) {
+              return (
+                <g key={key + "-act"} style={{ pointerEvents: "none" }}>
+                  <polygon points={hullStr} fill="none" stroke={P.warn} strokeWidth={3}
+                    strokeDasharray="10 10" strokeDashoffset={0} />
+                  <polygon points={hullStr} fill="none" stroke={P.info} strokeWidth={3}
+                    strokeDasharray="10 10" strokeDashoffset={10} />
+                </g>
+              );
+            }
+            return (
+              <polygon key={key + "-act"} points={hullStr} fill="none"
+                stroke={activity.lavagem ? P.info : P.warn} strokeWidth={3}
+                style={{ pointerEvents: "none" }} />
+            );
+          })}
           {/* Pass 2: tracker dots */}
           {trackerDots.map(({ key, n, pt, val }) => (
             <rect key={key + "-" + n}
@@ -983,6 +1026,31 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
               SDM {key}
             </text>
           ))}
+          {/* Pass 4: controles de atividade (admin) — marcar roçagem/lavagem em andamento */}
+          {activeLayer === "trackers" && onToggleActivity && boxData.map(({ key, bw, bh, cx, cy, activity }) => bw > 40 && bh > 34 && (
+            <g key={key + "-actbtn"} style={{ pointerEvents: "auto" }}>
+              <circle cx={cx - 14} cy={cy + 17} r={9}
+                fill={activity.rocagem ? P.warn : "rgba(11,15,30,0.75)"}
+                stroke={P.warn} strokeWidth={1.3}
+                style={{ cursor: "pointer" }}
+                onClick={(e) => { e.stopPropagation(); onToggleActivity(key, "rocagem"); }}>
+                <title>Roçagem em andamento — clique para {activity.rocagem ? "desmarcar" : "marcar"}</title>
+              </circle>
+              <text x={cx - 14} y={cy + 17} fontSize={9} fontWeight="700" fontFamily="monospace"
+                fill={activity.rocagem ? "#111827" : P.warn} textAnchor="middle" dominantBaseline="central"
+                style={{ pointerEvents: "none" }}>R</text>
+              <circle cx={cx + 14} cy={cy + 17} r={9}
+                fill={activity.lavagem ? P.info : "rgba(11,15,30,0.75)"}
+                stroke={P.info} strokeWidth={1.3}
+                style={{ cursor: "pointer" }}
+                onClick={(e) => { e.stopPropagation(); onToggleActivity(key, "lavagem"); }}>
+                <title>Lavagem em andamento — clique para {activity.lavagem ? "desmarcar" : "marcar"}</title>
+              </circle>
+              <text x={cx + 14} y={cy + 17} fontSize={9} fontWeight="700" fontFamily="monospace"
+                fill={activity.lavagem ? "#111827" : P.info} textAnchor="middle" dominantBaseline="central"
+                style={{ pointerEvents: "none" }}>L</text>
+            </g>
+          ))}
         </>
       )}
     </svg>,
@@ -995,7 +1063,7 @@ function ZoomWatcher({ onZoom }) {
   return null;
 }
 
-function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, focoType, focoVisit }) {
+function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, focoType, focoVisit, onToggleActivity }) {
   return (
     <div style={{
       flex: 1, minHeight: 0, position: "relative",
@@ -1009,12 +1077,13 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, f
       >
         <TileLayer
           url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-          maxZoom={20} maxNativeZoom={19}
+          maxZoom={20} maxNativeZoom={17}
         />
         <ZoomWatcher onZoom={onZoomChange} />
         <PlantLayer
           statuses={statuses} activeLayer={activeLayer}
           onSelect={onSelect} heatmap={heatmap} focoType={focoType} focoVisit={focoVisit}
+          onToggleActivity={onToggleActivity}
         />
       </MapContainer>
       {heatmap && (
@@ -1240,6 +1309,7 @@ export default function App() {
   const [statuses, setStatuses] = useState({});
   const [loaded, setLoaded] = useState(false);
   const [syncState, setSyncState] = useState("loading");
+  const [lastUpdated, setLastUpdated] = useState(null);
   const saveTimer = useRef(null);
   const skipNextRealtime = useRef(false);
   const userDirty = useRef(false);
@@ -1272,6 +1342,16 @@ export default function App() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readOnly]);
 
+  const toggleActivity = useCallback((subKey, kind) => {
+    setStatusesByUser((prev) => {
+      const act = { ...(prev._activity || {}) };
+      const cur = { ...(act[subKey] || { rocagem: false, lavagem: false }) };
+      cur[kind] = !cur[kind];
+      act[subKey] = cur;
+      return { ...prev, _activity: act };
+    });
+  }, [setStatusesByUser]);
+
   useEffect(() => {
     let channel;
     (async () => {
@@ -1283,11 +1363,12 @@ export default function App() {
       try {
         const { data, error } = await supabase
           .from("tracker_status")
-          .select("value")
+          .select("value, updated_at")
           .eq("id", STORAGE_ROW_ID)
           .maybeSingle();
         if (error) throw error;
         if (data && data.value) setStatuses(data.value);
+        if (data && data.updated_at) setLastUpdated(data.updated_at);
         setSyncState("ok");
       } catch (e) {
         console.error("Erro ao carregar do Supabase:", e);
@@ -1304,6 +1385,7 @@ export default function App() {
             if (skipNextRealtime.current) { skipNextRealtime.current = false; return; }
             if (userDirty.current) return;
             if (payload.new && payload.new.value) setStatuses(payload.new.value);
+            if (payload.new && payload.new.updated_at) setLastUpdated(payload.new.updated_at);
           }
         )
         .subscribe();
@@ -1319,10 +1401,12 @@ export default function App() {
       setSyncState("saving");
       try {
         skipNextRealtime.current = true;
+        const nowIso = new Date().toISOString();
         const { error } = await supabase
           .from("tracker_status")
-          .upsert({ id: STORAGE_ROW_ID, value: statuses, updated_at: new Date().toISOString() });
+          .upsert({ id: STORAGE_ROW_ID, value: statuses, updated_at: nowIso });
         if (error) throw error;
+        setLastUpdated(nowIso);
         setSyncState("ok");
       } catch (e) {
         userDirty.current = true;
@@ -1396,6 +1480,11 @@ export default function App() {
                 fontFamily: "monospace", letterSpacing: 0.5,
               }}>SOMENTE VISUALIZAÇÃO</span>
             )}
+            {lastUpdated && formatDateTime(lastUpdated) && (
+              <span style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.3 }}>
+                Atualizado em {formatDateTime(lastUpdated)}
+              </span>
+            )}
             <SyncBadge state={syncState} />
             <button onClick={handleLogout} title="Sair" style={{
               background: "transparent", border: `1px solid ${P.border}`,
@@ -1435,8 +1524,8 @@ export default function App() {
                   Heatmap
                 </button>
               )}
-              {!readOnly && (
-                <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: "auto" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: "auto" }}>
+                {!readOnly && (
                   <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
                     padding: "4px 10px", borderRadius: 7,
                     border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
@@ -1446,21 +1535,21 @@ export default function App() {
                   }}>
                     Acesso trator
                   </button>
-                  <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
-                    padding: "4px 10px", borderRadius: 7,
-                    border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
-                    cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                    background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
-                    color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
-                  }}>
-                    Trackers
-                  </button>
-                </div>
-              )}
+                )}
+                <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
+                  padding: "4px 10px", borderRadius: 7,
+                  border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
+                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+                  background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
+                  color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
+                }}>
+                  Trackers
+                </button>
+              </div>
             </div>
-            {!heatmap && mapZoom > 15 && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
+            {!heatmap && mapZoom > 15 && !isFocosLayer(activeLayer) && <Legend activeLayer={activeLayer} />}
             <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={readOnly ? () => {} : setView} heatmap={heatmap} onZoomChange={setMapZoom}
-              focoType={focoType} focoVisit={focoVisit} />
+              focoType={focoType} focoVisit={focoVisit} onToggleActivity={readOnly ? null : toggleActivity} />
           </div>
         ) : (
           <div style={{ flex: 1, minHeight: 0 }}>
