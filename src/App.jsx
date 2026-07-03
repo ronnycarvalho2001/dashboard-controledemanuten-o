@@ -101,7 +101,11 @@ function formatDateTime(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (isNaN(d.getTime())) return null;
-  return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm} ${hh}:${mi}`;
 }
 function median(arr) {
   if (!arr.length) return null;
@@ -198,13 +202,12 @@ function SyncBadge({ state }) {
     offline: { color: P.warn,    label: "offline" },
   }[state] || { color: P.muted, label: state };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <div title={cfg.label} style={{ display: "flex", alignItems: "center", gap: 6 }}>
       <div style={{
         width: 7, height: 7, borderRadius: "50%", background: cfg.color, flexShrink: 0,
         animation: state === "saving" || state === "loading" ? "pulse 1s ease-in-out infinite" : "none",
         boxShadow: state === "ok" ? `0 0 7px ${cfg.color}99` : "none",
       }} />
-      <span style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.3 }}>{cfg.label}</span>
     </div>
   );
 }
@@ -1481,8 +1484,12 @@ export default function App() {
               }}>SOMENTE VISUALIZAÇÃO</span>
             )}
             {lastUpdated && formatDateTime(lastUpdated) && (
-              <span style={{ color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.3 }}>
-                Atualizado em {formatDateTime(lastUpdated)}
+              <span title={`Atualizado em ${formatDateTime(lastUpdated)}`} style={{
+                display: "flex", alignItems: "center", gap: 5,
+                border: `1px solid ${P.border}`, borderRadius: 99, padding: "3px 10px",
+                color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.3,
+              }}>
+                <span style={{ opacity: 0.6 }}>↻</span>{formatDateTime(lastUpdated)}
               </span>
             )}
             <SyncBadge state={syncState} />
