@@ -1306,6 +1306,7 @@ export default function App() {
   const [focoVisit, setFocoVisit] = useState("v1");
   const setActiveLayer = (layer) => {
     if (layer === "trator" || layer === "trackers" || isFocosLayer(layer)) setHeatmap(false);
+    else if (readOnly) setHeatmap(true);
     setActiveLayerRaw(layer);
   };
   const [mapZoom, setMapZoom] = useState(15);
