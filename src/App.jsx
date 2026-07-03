@@ -878,6 +878,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   const map = useMap();
   const [, tick] = useReducer((n) => n + 1, 0);
   useMapEvents({ move: tick, zoom: tick, resize: tick });
+  const [hoverTracker, setHoverTracker] = useState(null);
 
   const isFocos = isFocosLayer(activeLayer);
   const realLayer = isFocos ? "pragas_c1" : activeLayer;
@@ -1018,8 +1019,27 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
             <rect key={key + "-" + n}
               x={pt.x - 4} y={pt.y - 9} width={8} height={18} rx={2}
               fill={STATE_COLORS[activeLayer][val]} opacity={0.95}
-              style={{ pointerEvents: "none" }} />
+              style={{ pointerEvents: activeLayer === "trackers" ? "auto" : "none", cursor: activeLayer === "trackers" ? "pointer" : "default" }}
+              onMouseEnter={activeLayer === "trackers" ? () => setHoverTracker({ key, n, pt, val }) : undefined}
+              onMouseLeave={activeLayer === "trackers" ? () => setHoverTracker(null) : undefined}
+            />
           ))}
+          {/* Tooltip do tracker sob o cursor */}
+          {activeLayer === "trackers" && hoverTracker && (() => {
+            const label = `${trackerId(hoverTracker.key, hoverTracker.n)}  •  ${LAYERS.find((l) => l.key === "trackers").states[hoverTracker.val]}`;
+            const tw = label.length * 6.2 + 16;
+            const tx = hoverTracker.pt.x - tw / 2, ty = hoverTracker.pt.y - 32;
+            return (
+              <g style={{ pointerEvents: "none" }}>
+                <rect x={tx} y={ty} width={tw} height={20} rx={5}
+                  fill="rgba(11,15,30,0.95)" stroke={P.border} strokeWidth={1} />
+                <text x={hoverTracker.pt.x} y={ty + 10} fontSize={11} fill="#fff" fontFamily="monospace"
+                  fontWeight="700" textAnchor="middle" dominantBaseline="middle">
+                  {label}
+                </text>
+              </g>
+            );
+          })()}
           {/* Pass 3: labels always on top of everything */}
           {boxData.map(({ key, bw, bh, cx, cy }) => bw > 24 && bh > 18 && (
             <text key={key + "-lbl"} x={cx} y={cy} fontSize={12} fill="#fff" fontFamily="monospace"
