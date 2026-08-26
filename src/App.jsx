@@ -4,6 +4,7 @@ import { supabase } from "./supabaseClient";
 import { MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { TRACKER_ELECTRICAL } from "./data/trackerElectrical";
 
 /* ════════════════════════════════════════════════════════════════════════
    DADOS DA PLANTA — coordenadas reais extraídas do mapa de coordenadas
@@ -96,6 +97,9 @@ function pad3(n) { return String(n).padStart(3, "0"); }
 function trackerId(key, n) {
   const [a, b] = key.split(".");
   return `EC-${a}-${b}-TR-${pad3(n)}`;
+}
+function getTrackerElectrical(subKey, n) {
+  return (TRACKER_ELECTRICAL[subKey] && TRACKER_ELECTRICAL[subKey][String(n)]) || null;
 }
 function formatDateTime(iso) {
   if (!iso) return null;
@@ -509,7 +513,13 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const [selected, setSelected] = useState(null);
   const [lastClicked, setLastClicked] = useState(null);
   const [scale, setScale] = useState(1);
+  const [editTrackers, setEditTrackers] = useState(false);
   const containerRef = useRef(null);
+
+  // Sai do modo edição sempre que a aba Trackers deixa de estar ativa, pra evitar deixar "armado" sem querer
+  useEffect(() => {
+    if (activeLayer !== "trackers") setEditTrackers(false);
+  }, [activeLayer]);
 
   const handleWheel = useCallback((e) => {
     e.preventDefault();
@@ -534,6 +544,12 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   }, [subKey, activeLayer, setStatuses]);
 
   const handleTrackerClick = useCallback((n, shiftKey) => {
+    // Aba Trackers: fora do modo edição, o clique só seleciona (mostra informações) — não altera status
+    if (activeLayer === "trackers" && !editTrackers) {
+      setSelected(n);
+      setLastClicked({ subKey, n });
+      return;
+    }
     const cur = getStatus(statuses, subKey, n)[LAYER_IDX[activeLayer]];
     const newVal = (cur + 1) % LAYERS.find((l) => l.key === activeLayer).states.length;
     if (shiftKey && lastClicked && lastClicked.subKey === subKey) {
@@ -546,7 +562,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
     }
     setSelected(n);
     setLastClicked({ subKey, n });
-  }, [statuses, subKey, activeLayer, lastClicked, applyToTrackers]);
+  }, [statuses, subKey, activeLayer, lastClicked, applyToTrackers, editTrackers]);
 
   const isFocos = isFocosLayer(activeLayer);
   const safeLayer = isFocos ? "pragas_c1" : activeLayer;
@@ -708,7 +724,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           </div>
           <SubMap geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
             filter={filter} showGroups={showGroups} selected={selected}
-            onClick={readOnly ? () => {} : handleTrackerClick} scale={scale} />
+            onClick={activeLayer === "trackers" ? handleTrackerClick : (readOnly ? () => {} : handleTrackerClick)} scale={scale} />
         </div>
 
         <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
@@ -728,7 +744,7 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             ))}
           </div>
 
-          {!readOnly && (
+          {!readOnly && activeLayer !== "trackers" && (
             <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
               <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
               {selected != null ? (
@@ -755,6 +771,96 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                   })}
                 </div>
               ) : <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver e editar o status. Shift+clique pinta um intervalo.</div>}
+            </div>
+          )}
+
+          {activeLayer === "trackers" && (
+            <div style={{ background: P.card, border: `1px solid ${P.purple}55`, borderRadius: 12, padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
+                <span style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>INFORMAÇÕES DO TRACKER</span>
+                {!readOnly && (
+                  <button onClick={() => setEditTrackers((v) => !v)} title={editTrackers ? "Clique no tracker no mapa altera o status" : "Ative para poder alterar o status ao clicar"} style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    background: editTrackers ? P.accent : "transparent",
+                    border: `1px solid ${editTrackers ? P.accent : P.border}`,
+                    color: editTrackers ? "#111827" : P.muted,
+                    borderRadius: 99, padding: "3px 10px", fontSize: 10.5, fontWeight: 700,
+                    cursor: "pointer", fontFamily: "inherit", flexShrink: 0, transition: "all .12s",
+                  }}>
+                    ✎ {editTrackers ? "Editando" : "Editar"}
+                  </button>
+                )}
+              </div>
+              {selected != null ? (() => {
+                const elec = getTrackerElectrical(subKey, selected);
+                const trackersLayer = LAYERS.find((l) => l.key === "trackers");
+                const li = LAYERS.indexOf(trackersLayer);
+                const val = selStatus[li];
+                const stateColor = STATE_COLORS.trackers[val];
+                const canEdit = !readOnly && editTrackers;
+                return (
+                  <div>
+                    <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 10, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
+
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                      <span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Status</span>
+                      {canEdit ? (
+                        <button onClick={() => applyToTrackers([selected], (val + 1) % trackersLayer.states.length)} style={{
+                          display: "flex", alignItems: "center", gap: 5,
+                          background: stateColor + "1e", border: `1px solid ${stateColor}55`,
+                          color: stateColor, borderRadius: 99, padding: "4px 11px",
+                          fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+                          transition: "all .12s",
+                        }}>
+                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: stateColor, flexShrink: 0 }} />
+                          {trackersLayer.states[val]}
+                        </button>
+                      ) : (
+                        <span style={{
+                          display: "flex", alignItems: "center", gap: 5,
+                          background: stateColor + "1e", border: `1px solid ${stateColor}55`,
+                          color: stateColor, borderRadius: 99, padding: "4px 11px",
+                          fontSize: 11, fontWeight: 600, fontFamily: "inherit",
+                        }}>
+                          <div style={{ width: 6, height: 6, borderRadius: "50%", background: stateColor, flexShrink: 0 }} />
+                          {trackersLayer.states[val]}
+                        </span>
+                      )}
+                    </div>
+
+                    {elec ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {[
+                          ["Inversor", elec.inversor],
+                          ["Combiner box", elec.combiner],
+                          ["Potência do módulo", `${elec.potModulo} W`],
+                          ["Módulos / string", elec.qtdModulos],
+                          ["Potência da string", `${elec.potString.toLocaleString("pt-BR")} Wp`],
+                        ].map(([label, value]) => (
+                          <div key={label} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                            <span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>{label}</span>
+                            <span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{value}</span>
+                          </div>
+                        ))}
+                        <div style={{ marginTop: 4 }}>
+                          <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 4 }}>STRINGS ({elec.strings.length})</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            {elec.strings.map((s) => (
+                              <span key={s} style={{ fontSize: 10.5, color: P.text, fontFamily: "monospace" }}>{s}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ color: P.muted, fontSize: 11.5 }}>Dados elétricos (combiner/string) ainda não cadastrados para este subcampo.</div>
+                    )}
+                  </div>
+                );
+              })() : (
+                <div style={{ color: P.muted, fontSize: 12.5 }}>
+                  Toque em um tracker no mapa para ver suas informações. {!readOnly && "Ative \"Editar\" para poder alterar o status ao clicar."}
+                </div>
+              )}
             </div>
           )}
 
@@ -874,17 +980,42 @@ const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
   return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
 }));
 
+// Zoom mínimo pra liberar o tooltip detalhado do tracker no mapa geral (~1-2 subcampos em tela)
+const TRACKER_INFO_MIN_ZOOM = 18;
+const TRACKER_INFO_HOVER_MS = 3000;
+
 function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVisit, onToggleActivity }) {
   const map = useMap();
   const [, tick] = useReducer((n) => n + 1, 0);
   useMapEvents({ move: tick, zoom: tick, resize: tick });
   const [hoverTracker, setHoverTracker] = useState(null);
+  const [richTooltip, setRichTooltip] = useState(null);
+  const hoverTimerRef = useRef(null);
+  const zoomRef = useRef(15);
 
   const isFocos = isFocosLayer(activeLayer);
   const realLayer = isFocos ? "pragas_c1" : activeLayer;
   const idx = LAYER_IDX[realLayer];
   const size = map.getSize();
   const zoom = map.getZoom();
+  zoomRef.current = zoom;
+
+  const clearHoverTimer = () => {
+    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
+  };
+  useEffect(() => clearHoverTimer, []);
+  const handleDotEnter = useCallback((info) => {
+    setHoverTracker(info);
+    clearHoverTimer();
+    hoverTimerRef.current = setTimeout(() => {
+      if (zoomRef.current >= TRACKER_INFO_MIN_ZOOM) setRichTooltip(info);
+    }, TRACKER_INFO_HOVER_MS);
+  }, []);
+  const handleDotLeave = useCallback(() => {
+    setHoverTracker(null);
+    setRichTooltip(null);
+    clearHoverTimer();
+  }, []);
 
   const toPixel = (ll) => map.latLngToContainerPoint(L.latLng(ll[0], ll[1]));
 
@@ -1020,23 +1151,37 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
               x={pt.x - 4} y={pt.y - 9} width={8} height={18} rx={2}
               fill={STATE_COLORS[activeLayer][val]} opacity={0.95}
               style={{ pointerEvents: activeLayer === "trackers" ? "auto" : "none", cursor: activeLayer === "trackers" ? "pointer" : "default" }}
-              onMouseEnter={activeLayer === "trackers" ? () => setHoverTracker({ key, n, pt, val }) : undefined}
-              onMouseLeave={activeLayer === "trackers" ? () => setHoverTracker(null) : undefined}
+              onMouseEnter={activeLayer === "trackers" ? () => handleDotEnter({ key, n, pt, val }) : undefined}
+              onMouseLeave={activeLayer === "trackers" ? handleDotLeave : undefined}
             />
           ))}
-          {/* Tooltip do tracker sob o cursor */}
-          {activeLayer === "trackers" && hoverTracker && (() => {
-            const label = `${trackerId(hoverTracker.key, hoverTracker.n)}  •  ${LAYERS.find((l) => l.key === "trackers").states[hoverTracker.val]}`;
-            const tw = label.length * 6.2 + 16;
-            const tx = hoverTracker.pt.x - tw / 2, ty = hoverTracker.pt.y - 32;
+          {/* Realce imediato do tracker sob o cursor — só quando o zoom já libera o tooltip detalhado */}
+          {activeLayer === "trackers" && hoverTracker && zoom >= TRACKER_INFO_MIN_ZOOM && (
+            <rect x={hoverTracker.pt.x - 6.5} y={hoverTracker.pt.y - 11.5} width={13} height={23} rx={3}
+              fill="none" stroke="#fff" strokeWidth={1.5} opacity={0.85} style={{ pointerEvents: "none" }} />
+          )}
+          {/* Tooltip no hover — só com zoom próximo (1-2 subcampos). Sem dados de string aqui; string só no menu do subcampo. */}
+          {activeLayer === "trackers" && richTooltip && zoom >= TRACKER_INFO_MIN_ZOOM && (() => {
+            const elec = getTrackerElectrical(richTooltip.key, richTooltip.n);
+            const lines = [
+              `${trackerId(richTooltip.key, richTooltip.n)}  •  ${LAYERS.find((l) => l.key === "trackers").states[richTooltip.val]}`,
+              elec ? `Combiner: ${elec.combiner}` : "Sem dados elétricos cadastrados",
+            ].filter(Boolean);
+            const tw = Math.max(...lines.map((l) => l.length)) * 6.2 + 16;
+            const lh = 16;
+            const th = lines.length * lh + 8;
+            const tx = richTooltip.pt.x - tw / 2, ty = richTooltip.pt.y - th - 12;
             return (
               <g style={{ pointerEvents: "none" }}>
-                <rect x={tx} y={ty} width={tw} height={20} rx={5}
+                <rect x={tx} y={ty} width={tw} height={th} rx={5}
                   fill="rgba(11,15,30,0.95)" stroke={P.border} strokeWidth={1} />
-                <text x={hoverTracker.pt.x} y={ty + 10} fontSize={11} fill="#fff" fontFamily="monospace"
-                  fontWeight="700" textAnchor="middle" dominantBaseline="middle">
-                  {label}
-                </text>
+                {lines.map((line, i) => (
+                  <text key={i} x={richTooltip.pt.x} y={ty + 8 + lh * i + lh / 2} fontSize={11}
+                    fill={i === 0 ? "#fff" : P.muted} fontFamily="monospace"
+                    fontWeight={i === 0 ? "700" : "500"} textAnchor="middle" dominantBaseline="middle">
+                    {line}
+                  </text>
+                ))}
               </g>
             );
           })()}
