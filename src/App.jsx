@@ -980,9 +980,8 @@ const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
   return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
 }));
 
-// Zoom mínimo pra liberar o tooltip detalhado do tracker no mapa geral (~1-2 subcampos em tela)
-const TRACKER_INFO_MIN_ZOOM = 18;
-const TRACKER_INFO_HOVER_MS = 3000;
+// Zoom mínimo pra liberar os dots/tooltip do tracker no mapa geral (mesmo limiar dos dots, sem espera)
+const TRACKER_INFO_MIN_ZOOM = 15;
 
 function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVisit, onToggleActivity }) {
   const map = useMap();
@@ -990,7 +989,6 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   useMapEvents({ move: tick, zoom: tick, resize: tick });
   const [hoverTracker, setHoverTracker] = useState(null);
   const [richTooltip, setRichTooltip] = useState(null);
-  const hoverTimerRef = useRef(null);
   const zoomRef = useRef(15);
 
   const isFocos = isFocosLayer(activeLayer);
@@ -1000,21 +998,13 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   const zoom = map.getZoom();
   zoomRef.current = zoom;
 
-  const clearHoverTimer = () => {
-    if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
-  };
-  useEffect(() => clearHoverTimer, []);
   const handleDotEnter = useCallback((info) => {
     setHoverTracker(info);
-    clearHoverTimer();
-    hoverTimerRef.current = setTimeout(() => {
-      if (zoomRef.current >= TRACKER_INFO_MIN_ZOOM) setRichTooltip(info);
-    }, TRACKER_INFO_HOVER_MS);
+    setRichTooltip(info);
   }, []);
   const handleDotLeave = useCallback(() => {
     setHoverTracker(null);
     setRichTooltip(null);
-    clearHoverTimer();
   }, []);
 
   const toPixel = (ll) => map.latLngToContainerPoint(L.latLng(ll[0], ll[1]));
@@ -1155,13 +1145,13 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
               onMouseLeave={activeLayer === "trackers" ? handleDotLeave : undefined}
             />
           ))}
-          {/* Realce imediato do tracker sob o cursor — só quando o zoom já libera o tooltip detalhado */}
-          {activeLayer === "trackers" && hoverTracker && zoom >= TRACKER_INFO_MIN_ZOOM && (
+          {/* Realce imediato do tracker sob o cursor */}
+          {activeLayer === "trackers" && hoverTracker && (
             <rect x={hoverTracker.pt.x - 6.5} y={hoverTracker.pt.y - 11.5} width={13} height={23} rx={3}
               fill="none" stroke="#fff" strokeWidth={1.5} opacity={0.85} style={{ pointerEvents: "none" }} />
           )}
-          {/* Tooltip no hover — só com zoom próximo (1-2 subcampos). Sem dados de string aqui; string só no menu do subcampo. */}
-          {activeLayer === "trackers" && richTooltip && zoom >= TRACKER_INFO_MIN_ZOOM && (() => {
+          {/* Tooltip no hover, imediato — sem dados de string aqui; string só no menu do subcampo */}
+          {activeLayer === "trackers" && richTooltip && (() => {
             const elec = getTrackerElectrical(richTooltip.key, richTooltip.n);
             const lines = [
               `${trackerId(richTooltip.key, richTooltip.n)}  •  ${LAYERS.find((l) => l.key === "trackers").states[richTooltip.val]}`,
