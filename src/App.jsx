@@ -503,29 +503,6 @@ function computeCombinerLayout(subKey) {
   }
   const rowGap = median(rowGaps) || 70;
 
-  // Vão até a próxima fileira REAL a partir de rowY, andando pra sul (dir=+1)
-  // ou norte (dir=-1). Ignora vãos praticamente nulos (fileiras quase coinci-
-  // dentes na mesma latitude — na prática duas metades leste/oeste da MESMA
-  // fileira, separadas por uma via/córrego, não fileiras empilhadas) e soma
-  // até achar um vão real (≥ 20% da mediana) ou a borda do subcampo. Usada
-  // tanto pro tamanho do tracker em H quanto pra posição da combiner, pra não
-  // "enxergar" essas quase-duplicatas como se fossem espaço vazio ou fileira
-  // vizinha de verdade.
-  function neighborGap(rowY, dir) {
-    let j = rowYs.indexOf(rowY);
-    const start = j;
-    while (true) {
-      const nj = j + dir;
-      if (nj < 0 || nj >= rowYs.length) return j === start ? null : Math.abs(rowYs[j] - rowYs[start]);
-      const stepGap = Math.abs(rowYs[nj] - rowYs[j]);
-      j = nj;
-      if (stepGap >= rowGap * 0.2) return Math.abs(rowYs[j] - rowYs[start]);
-    }
-  }
-  function neighborGaps(rowY) {
-    return { gapSouth: neighborGap(rowY, 1), gapNorth: neighborGap(rowY, -1) };
-  }
-
   // Meia-altura (em metros) do tracker em H: padronizada pela mediana do
   // subcampo em TODAS as fileiras — trackers grandes e uniformes, do mesmo
   // jeito em qualquer ponto do subcampo. A posição da combiner (abaixo) é
@@ -538,27 +515,6 @@ function computeCombinerLayout(subKey) {
   // encostar no tracker (grande, padrão) de nenhum dos dois lados, com uma
   // pequena folga extra de segurança.
   const MIN_SAFE_GAP = (uniformHalfHeight / Math.min(COMBINER_NUDGE_FACTOR, 1 - COMBINER_NUDGE_FACTOR)) * 1.02;
-
-  // Anda a partir de rowY (índice em rowYs) na direção dir, pulando fileiras
-  // reais uma a uma, até achar um vão real (fileira a fileira, sem "furar"
-  // nenhuma) grande o bastante pra encaixar a combiner sem encostar em
-  // nenhuma delas. Se não achar (chegou na borda do subcampo), devolve o
-  // último ponto de parada com gap nulo (usa fallback de metade da mediana).
-  function findLandingGap(startRowY, dir) {
-    let idx = rowYs.indexOf(startRowY);
-    while (true) {
-      let nj = idx;
-      let stepGap = 0;
-      do {
-        nj += dir;
-        if (nj < 0 || nj >= rowYs.length) return { landingY: rowYs[idx], gap: null };
-        stepGap = Math.abs(rowYs[nj] - rowYs[idx]);
-      } while (stepGap < rowGap * 0.2);
-      const gap = Math.abs(rowYs[nj] - rowYs[idx]);
-      if (gap >= MIN_SAFE_GAP) return { landingY: rowYs[idx], gap };
-      idx = nj;
-    }
-  }
 
   // Vão entre colunas medido DENTRO de cada fileira (não no X global): fileiras
   // com deslocamentos diferentes uma da outra fariam o X global intercalar
@@ -577,6 +533,13 @@ function computeCombinerLayout(subKey) {
     }
   });
   const colGap = median(colGaps) || 11;
+
+  // Faixa de X ocupada por cada fileira — usada pra saber quais fileiras
+  // realmente "ficam por perto" de uma combiner específica. Uma fileira que
+  // mora numa faixa de X totalmente diferente (outro canto do talhão) não é
+  // vizinha de verdade, mesmo estando logo ali na lista global N→S de Y.
+  const rowXRangeByY = new Map();
+  xsByRow.forEach((xs, y) => rowXRangeByY.set(y, { minX: xs[0], maxX: xs[xs.length - 1] }));
 
   const byCombiner = new Map();
   trackers.forEach(([n]) => {
@@ -598,12 +561,39 @@ function computeCombinerLayout(subKey) {
     // trackers dessa combiner e desloca pro vão vazio mais próximo, usando
     // o vão REAL (norte ou sul) daquela fileira — nunca uma média global,
     // pra não cair em cima de uma fileira que não é dessa combiner.
+    const cMinX = Math.min(...pts.map((p) => p.x));
+    const cMaxX = Math.max(...pts.map((p) => p.x));
+    // Só entram como "vizinhas" fileiras cujo intervalo de X realmente toca
+    // o intervalo de X dessa combiner — uma fileira que mora numa faixa de X
+    // totalmente diferente (outro canto/ilha do talhão) não bloqueia nada,
+    // mesmo que apareça logo ali na lista global N→S por Y.
+    const localRows = rowYs.filter((ry) => {
+      const r = rowXRangeByY.get(ry);
+      return r && r.minX <= cMaxX && r.maxX >= cMinX;
+    });
+
+    function findLandingGap(startRowY, dir) {
+      let idx = localRows.indexOf(startRowY);
+      while (true) {
+        let nj = idx;
+        let stepGap = 0;
+        do {
+          nj += dir;
+          if (nj < 0 || nj >= localRows.length) return { landingY: localRows[idx], gap: null };
+          stepGap = Math.abs(localRows[nj] - localRows[idx]);
+        } while (stepGap < rowGap * 0.2);
+        const gap = Math.abs(localRows[nj] - localRows[idx]);
+        if (gap >= MIN_SAFE_GAP) return { landingY: localRows[idx], gap };
+        idx = nj;
+      }
+    }
+
     let y;
     const sortedYs = [...uniqueYs].sort((a, b) => b - a);
     const yNorth = sortedYs[0], ySouth = sortedYs[sortedYs.length - 1];
-    const idxNorth = rowYs.indexOf(yNorth), idxSouth = rowYs.indexOf(ySouth);
+    const idxNorthLocal = localRows.indexOf(yNorth), idxSouthLocal = localRows.indexOf(ySouth);
     let rowY;
-    if (uniqueYs.length >= 2 && idxSouth - idxNorth === 1) {
+    if (uniqueYs.length >= 2 && idxSouthLocal - idxNorthLocal === 1) {
       rowY = null; // decidido abaixo, caso o vão direto não seja seguro
     } else if (uniqueYs.length === 1) {
       rowY = uniqueYs[0];
@@ -612,9 +602,10 @@ function computeCombinerLayout(subKey) {
       pts.forEach((p) => countByY.set(p.y, (countByY.get(p.y) || 0) + 1));
       rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
     }
-    // Combiner entre duas fileiras REALMENTE adjacentes: se o vão dá pra
-    // caber com folga, fica exatamente no meio (posição mais natural). Senão,
-    // cai no mesmo tratamento de "andar até achar vão seguro" abaixo.
+    // Combiner entre duas fileiras REALMENTE adjacentes (dentre as que de fato
+    // ficam perto em X): se o vão dá pra caber com folga, fica exatamente no
+    // meio das próprias fileiras que ela atende — posição mais natural.
+    // Senão, cai no tratamento de "andar até achar vão seguro" abaixo.
     if (rowY == null) {
       const directGap = yNorth - ySouth;
       if (directGap >= (uniformHalfHeight * 2) * 1.02) {
@@ -624,10 +615,13 @@ function computeCombinerLayout(subKey) {
       }
     }
     if (y == null) {
-      // Anda pros dois lados até achar um vão real grande o bastante pra não
-      // encostar em nenhum tracker; usa o lado que exigir MENOS deslocamento
-      // (mais perto da própria fileira), preferindo um vão real encontrado
-      // sobre cair no fallback de borda do subcampo (fileira na ponta do campo).
+      // Anda pros dois lados (só entre fileiras vizinhas de verdade em X) até
+      // achar um vão real grande o bastante pra não encostar em nenhum
+      // tracker; usa o lado que exigir MENOS deslocamento (mais perto da
+      // própria fileira). Se nenhuma fileira vizinha em X existir de um lado
+      // ou dos dois (caso comum: fileira isolada, sem nada perto), cai bem
+      // pertinho da própria fileira (metade da mediana), só o suficiente pra
+      // não encostar nela mesma.
       const south = findLandingGap(rowY, 1);
       const north = findLandingGap(rowY, -1);
       const ySouthCand = south.gap != null ? south.landingY - south.gap * COMBINER_NUDGE_FACTOR : south.landingY - rowGap * COMBINER_NUDGE_FACTOR;
