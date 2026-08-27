@@ -645,6 +645,14 @@ function computeCombinerLayout(subKey) {
   const establishedMidpointByRowY = new Map();
   prepared.forEach((p) => {
     if (!p.isMidpointPair) return;
+    // Só registra pra reaproveitamento se as duas fileiras são vizinhas de
+    // verdade na lista GLOBAL (nenhuma fileira pulada no meio) — um par que
+    // só ficou "adjacente" porque uma fileira no meio não tinha X relevante
+    // PRA ESSA combiner (caso raro de fileira-topo isolada, tipo um par que
+    // pula uma fileira alheia) não deve virar a posição de outras combiners
+    // completamente diferentes que também usam uma dessas fileiras sozinhas.
+    const idxN = groupYs.indexOf(p.yNorth), idxS = groupYs.indexOf(p.ySouth);
+    if (idxS - idxN !== 1) return;
     const mid = (p.yNorth + p.ySouth) / 2;
     if (!establishedMidpointByRowY.has(p.yNorth)) establishedMidpointByRowY.set(p.yNorth, mid);
     if (!establishedMidpointByRowY.has(p.ySouth)) establishedMidpointByRowY.set(p.ySouth, mid);
