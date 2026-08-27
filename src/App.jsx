@@ -541,6 +541,34 @@ function computeCombinerLayout(subKey) {
   const rowXRangeByY = new Map();
   xsByRow.forEach((xs, y) => rowXRangeByY.set(y, { minX: xs[0], maxX: xs[xs.length - 1] }));
 
+  // Algumas fileiras têm uma "quase duplicata" a poucos metros de distância —
+  // na prática, a MESMA fileira física partida em duas metades (leste/oeste)
+  // por uma via/córrego que corta o talhão, não duas fileiras empilhadas de
+  // verdade (ex.: SM3.4, 552.2 e 556.6, só 4.4 m separadas). Agrupamos essas
+  // metades numa única "linha lógica" antes de procurar vizinhos/posições,
+  // senão uma combiner de um lado usaria uma fileira como vizinha enquanto
+  // uma combiner do outro lado (mesma linha física) ignora essa mesma fileira
+  // — resultando nas duas ficando em lugares diferentes quando deveriam ficar
+  // na mesma linha.
+  const rowGroups = [];
+  rowYs.forEach((y) => {
+    const g = rowGroups[rowGroups.length - 1];
+    if (g && Math.abs(g.members[g.members.length - 1] - y) < rowGap * 0.2) g.members.push(y);
+    else rowGroups.push({ members: [y] });
+  });
+  rowGroups.forEach((g) => {
+    g.y = g.members.reduce((s, v) => s + v, 0) / g.members.length;
+    const ranges = g.members.map((my) => rowXRangeByY.get(my)).filter(Boolean);
+    g.minX = Math.min(...ranges.map((r) => r.minX));
+    g.maxX = Math.max(...ranges.map((r) => r.maxX));
+  });
+  const groupYByRowY = new Map();
+  const groupSizeByGroupY = new Map();
+  rowGroups.forEach((g) => g.members.forEach((my) => groupYByRowY.set(my, g.y)));
+  rowGroups.forEach((g) => groupSizeByGroupY.set(g.y, g.members.length));
+  const groupYs = rowGroups.map((g) => g.y); // já ordenado N→S (rowYs estava)
+  const groupXRangeByY = new Map(rowGroups.map((g) => [g.y, { minX: g.minX, maxX: g.maxX }]));
+
   const byCombiner = new Map();
   trackers.forEach(([n]) => {
     const elec = getTrackerElectrical(subKey, n);
@@ -554,7 +582,11 @@ function computeCombinerLayout(subKey) {
   const combiners = [...byCombiner.values()].map((c) => {
     const pts = c.trackers.map((n) => posByN.get(n)).filter(Boolean);
     const avgX = pts.reduce((s, p) => s + p.x, 0) / pts.length;
-    const uniqueYs = [...new Set(pts.map((p) => p.y))];
+    // Ancora nas LINHAS lógicas (fileiras já agrupadas), não na fileira crua —
+    // uma combiner que só toca a metade leste de uma linha partida usa a
+    // mesma linha (e portanto a mesma posição) que uma combiner vizinha que
+    // só toca a metade oeste dessa mesma linha física.
+    const uniqueYs = [...new Set(pts.map((p) => groupYByRowY.get(p.y)))];
     // Combiner entre duas fileiras ADJACENTES: fica no meio do vão real.
     // Combiner numa fileira só (ou entre fileiras que pulam uma fileira
     // alheia no meio — caso raro de talhão): ancora na fileira com mais
@@ -563,12 +595,12 @@ function computeCombinerLayout(subKey) {
     // pra não cair em cima de uma fileira que não é dessa combiner.
     const cMinX = Math.min(...pts.map((p) => p.x));
     const cMaxX = Math.max(...pts.map((p) => p.x));
-    // Só entram como "vizinhas" fileiras cujo intervalo de X realmente toca
-    // o intervalo de X dessa combiner — uma fileira que mora numa faixa de X
+    // Só entram como "vizinhas" linhas cujo intervalo de X realmente toca o
+    // intervalo de X dessa combiner — uma linha que mora numa faixa de X
     // totalmente diferente (outro canto/ilha do talhão) não bloqueia nada,
-    // mesmo que apareça logo ali na lista global N→S por Y.
-    const localRows = rowYs.filter((ry) => {
-      const r = rowXRangeByY.get(ry);
+    // mesmo que apareça logo ali na lista global N→S de Y.
+    const localRows = groupYs.filter((ry) => {
+      const r = groupXRangeByY.get(ry);
       return r && r.minX <= cMaxX && r.maxX >= cMinX;
     });
 
@@ -592,14 +624,23 @@ function computeCombinerLayout(subKey) {
     const sortedYs = [...uniqueYs].sort((a, b) => b - a);
     const yNorth = sortedYs[0], ySouth = sortedYs[sortedYs.length - 1];
     const idxNorthLocal = localRows.indexOf(yNorth), idxSouthLocal = localRows.indexOf(ySouth);
+    // Se uma das duas linhas é uma linha partida (agrupada de duas metades),
+    // não usar o meio do vão — as combiners dessa linha (de qualquer metade)
+    // seguem sempre a mesma convenção da linha partida (ancorar nela e buscar
+    // vão livre pro lado, não ficar "presa" no meio com a fileira vizinha).
+    const northIsSplitLine = (groupSizeByGroupY.get(yNorth) || 1) > 1;
+    const southIsSplitLine = (groupSizeByGroupY.get(ySouth) || 1) > 1;
     let rowY;
-    if (uniqueYs.length >= 2 && idxSouthLocal - idxNorthLocal === 1) {
+    if (uniqueYs.length >= 2 && idxSouthLocal - idxNorthLocal === 1 && !northIsSplitLine && !southIsSplitLine) {
       rowY = null; // decidido abaixo, caso o vão direto não seja seguro
     } else if (uniqueYs.length === 1) {
       rowY = uniqueYs[0];
     } else {
       const countByY = new Map();
-      pts.forEach((p) => countByY.set(p.y, (countByY.get(p.y) || 0) + 1));
+      pts.forEach((p) => {
+        const gy = groupYByRowY.get(p.y);
+        countByY.set(gy, (countByY.get(gy) || 0) + 1);
+      });
       rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
     }
     // Combiner entre duas fileiras REALMENTE adjacentes (dentre as que de fato
@@ -627,8 +668,13 @@ function computeCombinerLayout(subKey) {
       const ySouthCand = south.gap != null ? south.landingY - south.gap * COMBINER_NUDGE_FACTOR : south.landingY - rowGap * COMBINER_NUDGE_FACTOR;
       const yNorthCand = north.gap != null ? north.landingY + north.gap * COMBINER_NUDGE_FACTOR : north.landingY + rowGap * COMBINER_NUDGE_FACTOR;
       const southOk = south.gap != null, northOk = north.gap != null;
+      // Ancorada numa linha partida (metades leste/oeste do mesmo talhão):
+      // sempre pro mesmo lado (norte) que as outras combiners dessa linha,
+      // não o lado com menos deslocamento — senão metades diferentes da
+      // mesma linha acabam em lados opostos.
+      const anchorIsSplitLine = (groupSizeByGroupY.get(rowY) || 1) > 1;
       if (southOk && northOk) {
-        y = Math.abs(ySouthCand - rowY) <= Math.abs(yNorthCand - rowY) ? ySouthCand : yNorthCand;
+        y = anchorIsSplitLine ? yNorthCand : (Math.abs(ySouthCand - rowY) <= Math.abs(yNorthCand - rowY) ? ySouthCand : yNorthCand);
       } else if (southOk) {
         y = ySouthCand;
       } else if (northOk) {
