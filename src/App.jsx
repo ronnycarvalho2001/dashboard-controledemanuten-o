@@ -527,20 +527,38 @@ function computeCombinerLayout(subKey) {
   }
 
   // Meia-altura (em metros) do tracker em H: padronizada pela mediana do
-  // subcampo (grande, uniforme) em quase todas as fileiras. Só encolhe numa
-  // fileira específica quando o vão real até a vizinha (norte OU sul) é
-  // genuinamente menor do que o necessário pra caber o tamanho padrão sem
-  // sobrepor — ex.: o trio mais ao norte do SM3.5, com vãos reais de
-  // 32-35m contra a mediana de 71m do subcampo. Nesses casos raros, cabe
-  // melhor um tracker um pouco menor do que um combiner em cima do tracker.
+  // subcampo em TODAS as fileiras — trackers grandes e uniformes, do mesmo
+  // jeito em qualquer ponto do subcampo. A posição da combiner (abaixo) é
+  // que se adapta pra não cair em cima de um tracker, não o contrário.
   const rowHalfHeightByY = new Map();
   const uniformHalfHeight = rowGap * TRACKER_H_HALF_FACTOR;
-  rowYs.forEach((rowY) => {
-    const { gapSouth, gapNorth } = neighborGaps(rowY);
-    const localGaps = [gapSouth, gapNorth].filter((g) => g != null);
-    const localMinGap = localGaps.length ? Math.min(...localGaps) : rowGap;
-    rowHalfHeightByY.set(rowY, Math.min(uniformHalfHeight, localMinGap * TRACKER_H_HALF_FACTOR));
-  });
+  rowYs.forEach((rowY) => rowHalfHeightByY.set(rowY, uniformHalfHeight));
+
+  // Vão mínimo necessário pra uma combiner caber entre duas fileiras sem
+  // encostar no tracker (grande, padrão) de nenhum dos dois lados, com uma
+  // pequena folga extra de segurança.
+  const MIN_SAFE_GAP = (uniformHalfHeight / Math.min(COMBINER_NUDGE_FACTOR, 1 - COMBINER_NUDGE_FACTOR)) * 1.02;
+
+  // Anda a partir de rowY (índice em rowYs) na direção dir, pulando fileiras
+  // reais uma a uma, até achar um vão real (fileira a fileira, sem "furar"
+  // nenhuma) grande o bastante pra encaixar a combiner sem encostar em
+  // nenhuma delas. Se não achar (chegou na borda do subcampo), devolve o
+  // último ponto de parada com gap nulo (usa fallback de metade da mediana).
+  function findLandingGap(startRowY, dir) {
+    let idx = rowYs.indexOf(startRowY);
+    while (true) {
+      let nj = idx;
+      let stepGap = 0;
+      do {
+        nj += dir;
+        if (nj < 0 || nj >= rowYs.length) return { landingY: rowYs[idx], gap: null };
+        stepGap = Math.abs(rowYs[nj] - rowYs[idx]);
+      } while (stepGap < rowGap * 0.2);
+      const gap = Math.abs(rowYs[nj] - rowYs[idx]);
+      if (gap >= MIN_SAFE_GAP) return { landingY: rowYs[idx], gap };
+      idx = nj;
+    }
+  }
 
   // Vão entre colunas medido DENTRO de cada fileira (não no X global): fileiras
   // com deslocamentos diferentes uma da outra fariam o X global intercalar
@@ -584,27 +602,45 @@ function computeCombinerLayout(subKey) {
     const sortedYs = [...uniqueYs].sort((a, b) => b - a);
     const yNorth = sortedYs[0], ySouth = sortedYs[sortedYs.length - 1];
     const idxNorth = rowYs.indexOf(yNorth), idxSouth = rowYs.indexOf(ySouth);
+    let rowY;
     if (uniqueYs.length >= 2 && idxSouth - idxNorth === 1) {
-      y = (yNorth + ySouth) / 2;
+      rowY = null; // decidido abaixo, caso o vão direto não seja seguro
+    } else if (uniqueYs.length === 1) {
+      rowY = uniqueYs[0];
     } else {
-      let rowY;
-      if (uniqueYs.length === 1) {
-        rowY = uniqueYs[0];
+      const countByY = new Map();
+      pts.forEach((p) => countByY.set(p.y, (countByY.get(p.y) || 0) + 1));
+      rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
+    }
+    // Combiner entre duas fileiras REALMENTE adjacentes: se o vão dá pra
+    // caber com folga, fica exatamente no meio (posição mais natural). Senão,
+    // cai no mesmo tratamento de "andar até achar vão seguro" abaixo.
+    if (rowY == null) {
+      const directGap = yNorth - ySouth;
+      if (directGap >= (uniformHalfHeight * 2) * 1.02) {
+        y = (yNorth + ySouth) / 2;
       } else {
-        const countByY = new Map();
-        pts.forEach((p) => countByY.set(p.y, (countByY.get(p.y) || 0) + 1));
-        rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
+        rowY = yNorth; // ancora na fileira norte e busca vão seguro a partir dela
       }
-      // Sempre usa o lado com mais espaço REAL disponível — não necessariamente
-      // o lado onde fica o resto da combiner (que pode estar vários vãos além,
-      // pulando uma fileira que não é dela).
-      const { gapSouth, gapNorth } = neighborGaps(rowY);
-      if (gapSouth != null && (gapNorth == null || gapSouth >= gapNorth)) {
-        y = rowY - gapSouth * COMBINER_NUDGE_FACTOR;
-      } else if (gapNorth != null) {
-        y = rowY + gapNorth * COMBINER_NUDGE_FACTOR;
+    }
+    if (y == null) {
+      // Anda pros dois lados até achar um vão real grande o bastante pra não
+      // encostar em nenhum tracker; usa o lado que exigir MENOS deslocamento
+      // (mais perto da própria fileira), preferindo um vão real encontrado
+      // sobre cair no fallback de borda do subcampo (fileira na ponta do campo).
+      const south = findLandingGap(rowY, 1);
+      const north = findLandingGap(rowY, -1);
+      const ySouthCand = south.gap != null ? south.landingY - south.gap * COMBINER_NUDGE_FACTOR : south.landingY - rowGap * COMBINER_NUDGE_FACTOR;
+      const yNorthCand = north.gap != null ? north.landingY + north.gap * COMBINER_NUDGE_FACTOR : north.landingY + rowGap * COMBINER_NUDGE_FACTOR;
+      const southOk = south.gap != null, northOk = north.gap != null;
+      if (southOk && northOk) {
+        y = Math.abs(ySouthCand - rowY) <= Math.abs(yNorthCand - rowY) ? ySouthCand : yNorthCand;
+      } else if (southOk) {
+        y = ySouthCand;
+      } else if (northOk) {
+        y = yNorthCand;
       } else {
-        y = rowY - rowGap * COMBINER_NUDGE_FACTOR;
+        y = ySouthCand;
       }
     }
     const stringCount = c.trackers.reduce((s, n) => {
@@ -1150,12 +1186,32 @@ const SUBCAMPO_BLOCKS_LL = Object.fromEntries(SUB_KEYS.map((key) => {
     }
   });
 
-  // Cada bloco vira um quadrilátero simples e independente (sem "escada"
-  // única que possa se autocruzar quando as larguras variam muito).
-  return [key, blocks.map((b) => [
-    [b.minX - hx, b.yTop + hy], [b.maxX + hx, b.yTop + hy],
-    [b.maxX + hx, b.yBottom - hy], [b.minX - hx, b.yBottom - hy],
-  ].map(([x, y]) => utmToLatLon(x, y)))];
+  // Agrupa blocos consecutivos (N→S) cuja faixa de X se sobrepõe numa mesma
+  // "cadeia" contínua — um recorte que pula pra um X totalmente diferente
+  // (sem nenhuma sobreposição) começa uma cadeia nova, pois fisicamente é
+  // outra área, não uma continuação. Cada cadeia vira UM contorno só,
+  // traçado (borda esquerda N→S, depois direita S→N): dentro de uma cadeia
+  // os blocos sempre se sobrepõem em X, então esse traçado nunca se
+  // autocruza, e a fusão elimina a costura/serrilhado visível entre blocos
+  // vizinhos que já formam uma área contínua de verdade.
+  // Sobreposição real de X (sem a margem hx) — dois blocos que só "encostam"
+  // por causa da margem de desenho não contam como a mesma área contínua.
+  const chains = [];
+  blocks.forEach((b) => {
+    const chain = chains[chains.length - 1];
+    const prev = chain && chain[chain.length - 1];
+    const overlaps = prev && b.minX <= prev.maxX && b.maxX >= prev.minX;
+    if (overlaps) chain.push(b);
+    else chains.push([b]);
+  });
+
+  return [key, chains.map((chainBlocks) => {
+    const utmPoly = [
+      ...chainBlocks.flatMap((b) => [[b.minX - hx, b.yTop + hy], [b.minX - hx, b.yBottom - hy]]),
+      ...[...chainBlocks].reverse().flatMap((b) => [[b.maxX + hx, b.yBottom - hy], [b.maxX + hx, b.yTop + hy]]),
+    ];
+    return utmPoly.map(([x, y]) => utmToLatLon(x, y));
+  })];
 }));
 
 // Zoom mínimo pra liberar os dots/tooltip do tracker no mapa geral (mesmo limiar dos dots, sem espera)
