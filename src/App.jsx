@@ -503,24 +503,36 @@ function computeCombinerLayout(subKey) {
   }
   const rowGap = median(rowGaps) || 70;
 
+  // Vão até a próxima fileira REAL a partir de rowY, andando pra sul (dir=+1)
+  // ou norte (dir=-1). Ignora vãos praticamente nulos (fileiras quase coinci-
+  // dentes na mesma latitude — na prática duas metades leste/oeste da MESMA
+  // fileira, separadas por uma via/córrego, não fileiras empilhadas) e soma
+  // até achar um vão real (≥ 20% da mediana) ou a borda do subcampo. Usada
+  // tanto pro tamanho do tracker em H quanto pra posição da combiner, pra não
+  // "enxergar" essas quase-duplicatas como se fossem espaço vazio ou fileira
+  // vizinha de verdade.
+  function neighborGap(rowY, dir) {
+    let j = rowYs.indexOf(rowY);
+    const start = j;
+    while (true) {
+      const nj = j + dir;
+      if (nj < 0 || nj >= rowYs.length) return j === start ? null : Math.abs(rowYs[j] - rowYs[start]);
+      const stepGap = Math.abs(rowYs[nj] - rowYs[j]);
+      j = nj;
+      if (stepGap >= rowGap * 0.2) return Math.abs(rowYs[j] - rowYs[start]);
+    }
+  }
   function neighborGaps(rowY) {
-    const idx = rowYs.indexOf(rowY);
-    const gapSouth = idx < rowYs.length - 1 ? rowY - rowYs[idx + 1] : null;
-    const gapNorth = idx > 0 ? rowYs[idx - 1] - rowY : null;
-    return { gapSouth, gapNorth };
+    return { gapSouth: neighborGap(rowY, 1), gapNorth: neighborGap(rowY, -1) };
   }
 
-  // Meia-altura (em metros) do tracker em H em CADA fileira, limitada ao menor
-  // vão vizinho REAL daquela fileira específica — não a mediana do subcampo.
-  // Sem isso, fileiras excepcionalmente próximas (recorte de talhão) fariam o
-  // tracker "vazar" para cima do vão vizinho.
+  // Meia-altura (em metros) do tracker em H: padronizada pela mediana do
+  // subcampo em TODAS as fileiras — trackers grandes e uniformes, do mesmo
+  // jeito em qualquer ponto do subcampo. A posição da combiner (abaixo) é
+  // que se adapta pra não cair em cima de um tracker, não o contrário.
   const rowHalfHeightByY = new Map();
-  rowYs.forEach((rowY) => {
-    const { gapSouth, gapNorth } = neighborGaps(rowY);
-    const localGap = gapSouth != null && gapNorth != null ? Math.min(gapSouth, gapNorth)
-      : gapSouth ?? gapNorth ?? rowGap;
-    rowHalfHeightByY.set(rowY, localGap * TRACKER_H_HALF_FACTOR);
-  });
+  const uniformHalfHeight = rowGap * TRACKER_H_HALF_FACTOR;
+  rowYs.forEach((rowY) => rowHalfHeightByY.set(rowY, uniformHalfHeight));
 
   // Vão entre colunas medido DENTRO de cada fileira (não no X global): fileiras
   // com deslocamentos diferentes uma da outra fariam o X global intercalar
@@ -575,14 +587,17 @@ function computeCombinerLayout(subKey) {
         pts.forEach((p) => countByY.set(p.y, (countByY.get(p.y) || 0) + 1));
         rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
       }
+      // Sempre usa o lado com mais espaço REAL disponível — não necessariamente
+      // o lado onde fica o resto da combiner (que pode estar vários vãos além,
+      // pulando uma fileira que não é dela).
       const { gapSouth, gapNorth } = neighborGaps(rowY);
-      const otherIsSouth = uniqueYs.length >= 2 && rowY === yNorth;
-      const otherIsNorth = uniqueYs.length >= 2 && rowY === ySouth;
-      if (otherIsSouth && gapSouth != null) y = rowY - gapSouth * COMBINER_NUDGE_FACTOR;
-      else if (otherIsNorth && gapNorth != null) y = rowY + gapNorth * COMBINER_NUDGE_FACTOR;
-      else y = gapSouth != null ? rowY - gapSouth * COMBINER_NUDGE_FACTOR
-        : gapNorth != null ? rowY + gapNorth * COMBINER_NUDGE_FACTOR
-        : rowY - rowGap * COMBINER_NUDGE_FACTOR;
+      if (gapSouth != null && (gapNorth == null || gapSouth >= gapNorth)) {
+        y = rowY - gapSouth * COMBINER_NUDGE_FACTOR;
+      } else if (gapNorth != null) {
+        y = rowY + gapNorth * COMBINER_NUDGE_FACTOR;
+      } else {
+        y = rowY - rowGap * COMBINER_NUDGE_FACTOR;
+      }
     }
     const stringCount = c.trackers.reduce((s, n) => {
       const e = getTrackerElectrical(subKey, n);
@@ -1096,17 +1111,36 @@ const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
     const g = allX[i] - allX[i - 1];
     if (g > 0.5 && g < 30) xGaps.push(g);
   }
-  xGaps.sort((a, b) => a - b);
-  const hx = xGaps.length ? xGaps[Math.floor(xGaps.length / 2)] / 2 : 8;
+  const hx = xGaps.length ? median(xGaps) / 2 : 8;
 
-  // Half Y margin: half the minimum spacing between rows
-  const yGaps = rows.slice(0, -1).map((r, i) => r.y - rows[i + 1].y);
-  const hy = yGaps.length ? Math.min(...yGaps) / 2 : 36;
+  // Half Y margin: metade da MEDIANA do vão entre fileiras (não o mínimo —
+  // uma fileira quase duplicada faria essa margem cair quase a zero e abrir
+  // um entalhe no contorno bem onde não devia).
+  const yGaps = rows.slice(0, -1).map((r, i) => r.y - rows[i + 1].y).filter((g) => g > 0);
+  const hy = yGaps.length ? median(yGaps) / 2 : 36;
+
+  // Funde fileiras adjacentes de largura parecida num único bloco retangular:
+  // contorno mais quadrado e com bem menos degraus/curvas, mas ainda fiel à
+  // área real ocupada pelos trackers — só junta onde a largura já é quase a
+  // mesma, não força um retângulo genérico por cima de recortes reais.
+  const WIDTH_TOL = Math.max(hx * 4, 20);
+  const blocks = [];
+  rows.forEach((r) => {
+    const last = blocks[blocks.length - 1];
+    if (last && Math.abs(r.minX - last.minX) <= WIDTH_TOL && Math.abs(r.maxX - last.maxX) <= WIDTH_TOL) {
+      last.minX = Math.min(last.minX, r.minX);
+      last.maxX = Math.max(last.maxX, r.maxX);
+      last.yTop = Math.max(last.yTop, r.y);
+      last.yBottom = Math.min(last.yBottom, r.y);
+    } else {
+      blocks.push({ minX: r.minX, maxX: r.maxX, yTop: r.y, yBottom: r.y });
+    }
+  });
 
   // Staircase polygon: trace left edge N→S, then right edge S→N
   const utmPoly = [
-    ...rows.flatMap((r) => [[r.minX - hx, r.y + hy], [r.minX - hx, r.y - hy]]),
-    ...[...rows].reverse().flatMap((r) => [[r.maxX + hx, r.y - hy], [r.maxX + hx, r.y + hy]]),
+    ...blocks.flatMap((b) => [[b.minX - hx, b.yTop + hy], [b.minX - hx, b.yBottom - hy]]),
+    ...[...blocks].reverse().flatMap((b) => [[b.maxX + hx, b.yBottom - hy], [b.maxX + hx, b.yTop + hy]]),
   ];
 
   return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
@@ -1495,19 +1529,6 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, f
               background: "linear-gradient(to right, #facc15, #ff9b3d, #fa3d2d)",
             }} />
             <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}>Maior</span>
-          </div>
-        </div>
-      )}
-      {combinersMode && (
-        <div style={{
-          position: "absolute", top: 10, right: 10, zIndex: 1000,
-          background: "rgba(13,15,20,0.9)", border: `1px solid ${P.border}`,
-          borderRadius: 8, padding: "8px 10px", pointerEvents: "none", maxWidth: 220,
-        }}>
-          <div style={{ color: P.info, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>COMBINERS</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: P.card2, border: "1px solid #fff", marginRight: 5, verticalAlign: "middle" }} />Combiner</span>
-            <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: P.warn, marginRight: 5, verticalAlign: "middle" }} />Selecionada</span>
           </div>
         </div>
       )}
