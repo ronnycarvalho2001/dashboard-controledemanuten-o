@@ -474,6 +474,131 @@ function GroupPanel({ geo, subKey, statuses, activeLayer, onBulk, readOnly }) {
   );
 }
 
+/* ────────────────────────────────────────────────────────────────────────
+   COMBINERS — agrupamento de trackers por combiner box, com a posição real
+   derivada das coordenadas UTM dos próprios trackers (mesma fonte de
+   TRACKER_ELECTRICAL), posicionando a combiner no vão entre as fileiras
+   que ela atende — exatamente onde ela fica fisicamente no campo.
+   ──────────────────────────────────────────────────────────────────── */
+function useCombinerLayout(subKey, geo) {
+  return useMemo(() => {
+    const posByN = new Map(geo.trackers.map(([n, x, y]) => [n, { x, y }]));
+    const rowYs = [...new Set(geo.trackers.map(([, , y]) => y))].sort((a, b) => b - a);
+    let minGap = Infinity;
+    for (let i = 1; i < rowYs.length; i++) {
+      const d = rowYs[i - 1] - rowYs[i];
+      if (d > 0 && d < minGap) minGap = d;
+    }
+    if (!Number.isFinite(minGap)) minGap = geo.row;
+
+    const byCombiner = new Map();
+    geo.trackers.forEach(([n]) => {
+      const elec = getTrackerElectrical(subKey, n);
+      if (!elec || !elec.combiner) return;
+      if (!byCombiner.has(elec.combiner)) {
+        byCombiner.set(elec.combiner, { id: elec.combiner, inversor: elec.inversor, trackers: [] });
+      }
+      byCombiner.get(elec.combiner).trackers.push(n);
+    });
+
+    const combiners = [...byCombiner.values()].map((c) => {
+      const pts = c.trackers.map((n) => posByN.get(n)).filter(Boolean);
+      const avgX = pts.reduce((s, p) => s + p.x, 0) / pts.length;
+      const uniqueYs = [...new Set(pts.map((p) => p.y))];
+      // Combiner entre duas fileiras: fica no meio do vão. Combiner numa
+      // fileira só: desloca pro vão vazio mais próximo (onde não há tracker).
+      const y = uniqueYs.length >= 2
+        ? (Math.max(...uniqueYs) + Math.min(...uniqueYs)) / 2
+        : uniqueYs[0] - minGap * 0.32;
+      const stringCount = c.trackers.reduce((s, n) => {
+        const e = getTrackerElectrical(subKey, n);
+        return s + (e ? e.strings.length : 0);
+      }, 0);
+      return { ...c, x: avgX, y, trackerCount: c.trackers.length, stringCount };
+    }).sort((a, b) => a.id.localeCompare(b.id));
+
+    const trackerToCombiner = new Map();
+    combiners.forEach((c) => c.trackers.forEach((n) => trackerToCombiner.set(n, c.id)));
+    const byId = new Map(combiners.map((c) => [c.id, c]));
+    return { combiners, trackerToCombiner, byId, minGap };
+  }, [subKey, geo]);
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   MAPA DE COMBINERS — trackers em formato de H esticado + posição das CBs
+   ════════════════════════════════════════════════════════════════════════ */
+function CombinersMap({
+  geo, subKey, combinerLayout, selected, onTrackerClick,
+  selectedCombiner, hoveredCombiner, onCombinerClick, onCombinerHover, scale,
+}) {
+  const { trackers, minX, maxY, W, H, pad, padTop, col } = geo;
+  const { minGap, trackerToCombiner, byId, combiners } = combinerLayout;
+  const toX = (x) => x - minX + pad;
+  const toY = (y) => maxY - y + padTop;
+
+  const markerW = col * 0.52;
+  const markerH = minGap * 0.76;
+  const railW = markerW * 0.2;
+  const hubH = markerH * 0.045;
+  const cbSize = col * 0.5;
+
+  const vW = W / scale, vH = H / scale;
+  const vX = (W - vW) / 2, vY = (H - vH) / 2;
+  const sw = Math.max(W, H);
+
+  const highlighted = selectedCombiner ? byId.get(selectedCombiner) : null;
+  const highlightSet = highlighted ? new Set(highlighted.trackers) : null;
+  const hoveredCombinerData = hoveredCombiner ? byId.get(hoveredCombiner) : null;
+  const hoveredSet = hoveredCombinerData ? new Set(hoveredCombinerData.trackers) : null;
+
+  return (
+    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", cursor: "default" }}>
+      {trackers.map(([n, x, y]) => {
+        const cx = toX(x), cy = toY(y);
+        const left = cx - markerW / 2, top = cy - markerH / 2;
+        const isSel = selected === n;
+        const isHighlighted = highlightSet && highlightSet.has(n);
+        const isHovered = hoveredSet && hoveredSet.has(n);
+        const combId = trackerToCombiner.get(n);
+        const fill = isHighlighted ? P.warn : isHovered ? P.info : "#3a4668";
+        return (
+          <g key={n} fill={fill}
+            stroke={isSel ? P.text : "rgba(0,0,0,0.45)"}
+            strokeWidth={isSel ? sw * 0.0026 : sw * 0.0004}
+            style={{ cursor: "pointer" }}
+            onClick={() => onTrackerClick(n)}
+          >
+            <title>{`${trackerId(subKey, n)}${combId ? `  •  ${combId}` : ""}`}</title>
+            <rect x={left} y={top} width={railW} height={markerH} rx={railW * 0.4} />
+            <rect x={left + markerW - railW} y={top} width={railW} height={markerH} rx={railW * 0.4} />
+            <rect x={left} y={cy - hubH / 2} width={markerW} height={hubH} rx={hubH * 0.4} />
+          </g>
+        );
+      })}
+
+      {combiners.map((c) => {
+        const cx = toX(c.x), cy = toY(c.y);
+        const isSel = selectedCombiner === c.id;
+        const isHover = hoveredCombiner === c.id;
+        return (
+          <g key={c.id}
+            onMouseEnter={() => onCombinerHover(c.id)}
+            onMouseLeave={() => onCombinerHover(null)}
+            onClick={(e) => { e.stopPropagation(); onCombinerClick(c.id); }}
+            style={{ cursor: "pointer" }}
+          >
+            <title>{`${c.id}\nInversor: ${c.inversor}\nTrackers: ${c.trackerCount}  •  Strings: ${c.stringCount}\n${c.trackers.map((n) => trackerId(subKey, n)).join(", ")}`}</title>
+            <rect x={cx - cbSize / 2} y={cy - cbSize / 2} width={cbSize} height={cbSize} rx={cbSize * 0.22}
+              fill={isSel ? P.warn : isHover ? P.info : P.card2}
+              stroke={isSel ? P.warn : isHover ? P.info : P.border}
+              strokeWidth={sw * 0.0018} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    FERRAMENTA DE INTERVALO (1 a 132)
    ════════════════════════════════════════════════════════════════════════ */
@@ -514,12 +639,22 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const [lastClicked, setLastClicked] = useState(null);
   const [scale, setScale] = useState(1);
   const [editTrackers, setEditTrackers] = useState(false);
+  const [combinersMode, setCombinersMode] = useState(false);
+  const [selectedCombiner, setSelectedCombiner] = useState(null);
+  const [hoveredCombiner, setHoveredCombiner] = useState(null);
+  const combinerLayout = useCombinerLayout(subKey, geo);
   const containerRef = useRef(null);
 
   // Sai do modo edição sempre que a aba Trackers deixa de estar ativa, pra evitar deixar "armado" sem querer
   useEffect(() => {
     if (activeLayer !== "trackers") setEditTrackers(false);
   }, [activeLayer]);
+
+  // Limpa a seleção de combiner ao trocar de subcampo ou sair do modo
+  useEffect(() => {
+    setSelectedCombiner(null);
+    setHoveredCombiner(null);
+  }, [subKey, combinersMode]);
 
   const handleWheel = useCallback((e) => {
     e.preventDefault();
@@ -631,10 +766,117 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           }}>
             Trackers
           </button>
+          <button onClick={() => setCombinersMode((v) => !v)} style={{
+            padding: "4px 10px", borderRadius: 7,
+            border: `1px solid ${combinersMode ? P.info + "66" : P.border}`,
+            cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
+            background: combinersMode ? P.info + "22" : "transparent",
+            color: combinersMode ? P.info : P.muted, transition: "all .12s",
+          }}>
+            Mapa de Combiners
+          </button>
         </div>
       </div>
 
-      {isFocos ? (() => {
+      {combinersMode ? (
+        <div style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
+          <div ref={containerRef} onWheel={handleWheel} style={{
+            flex: "2 1 420px", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12,
+            padding: 12, overflow: "hidden", position: "relative",
+          }}>
+            <div style={{ position: "absolute", top: 10, right: 10, zIndex: 2, display: "flex", gap: 6 }}>
+              <button onClick={() => setScale((s) => Math.min(8, s * 1.1))} style={zoomBtnStyle}>＋</button>
+              <button onClick={() => setScale((s) => Math.max(1, s / 1.1))} style={zoomBtnStyle}>－</button>
+            </div>
+            <CombinersMap geo={geo} subKey={subKey} combinerLayout={combinerLayout}
+              selected={selected} onTrackerClick={(n) => setSelected(n)}
+              selectedCombiner={selectedCombiner} hoveredCombiner={hoveredCombiner}
+              onCombinerClick={(id) => setSelectedCombiner((cur) => cur === id ? null : id)}
+              onCombinerHover={setHoveredCombiner}
+              scale={scale} />
+          </div>
+
+          <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
+            <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>MAPA DE COMBINERS</div>
+              <div style={{ color: P.muted, fontSize: 11.5, lineHeight: 1.5 }}>
+                Clique em um quadrado para destacar os trackers ligados àquela combiner. Passe o cursor por cima para ver os dados. Clique em um tracker para ver suas informações elétricas.
+              </div>
+              <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10.5, color: P.muted, flexWrap: "wrap" }}>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: P.card2, border: `1px solid ${P.border}`, marginRight: 5, verticalAlign: "middle" }} />Combiner</span>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: P.warn, marginRight: 5, verticalAlign: "middle" }} />Selecionada</span>
+                <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: P.info, marginRight: 5, verticalAlign: "middle" }} />Em destaque (hover)</span>
+              </div>
+            </div>
+
+            {selectedCombiner && combinerLayout.byId.get(selectedCombiner) && (() => {
+              const c = combinerLayout.byId.get(selectedCombiner);
+              return (
+                <div style={{ background: P.card, border: `1px solid ${P.warn}55`, borderRadius: 12, padding: 14 }}>
+                  <div style={{ color: P.warn, fontWeight: 700, fontSize: 13, marginBottom: 8, fontFamily: "monospace" }}>{c.id}</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
+                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Inversor</span><span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{c.inversor}</span></div>
+                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Trackers</span><span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{c.trackerCount}</span></div>
+                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Strings</span><span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{c.stringCount}</span></div>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 4 }}>TRACKERS LIGADOS</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                    {c.trackers.map((n) => (
+                      <button key={n} onClick={() => setSelected(n)} style={{
+                        background: selected === n ? P.accentG : P.card2, border: `1px solid ${selected === n ? P.accent : P.border}`,
+                        color: selected === n ? P.accent : P.text, borderRadius: 6, padding: "3px 7px",
+                        fontSize: 10.5, fontFamily: "monospace", cursor: "pointer",
+                      }}>{trackerId(subKey, n)}</button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div style={{ background: P.card, border: `1px solid ${P.purple}55`, borderRadius: 12, padding: 14 }}>
+              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>INFORMAÇÕES DO TRACKER</div>
+              {selected != null ? (() => {
+                const elec = getTrackerElectrical(subKey, selected);
+                return (
+                  <div>
+                    <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 10, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
+                    {elec ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {[
+                          ["Inversor", elec.inversor],
+                          ["Combiner box", elec.combiner],
+                          ["Potência do módulo", `${elec.potModulo} W`],
+                          ["Módulos / string", elec.qtdModulos],
+                          ["Potência da string", `${elec.potString.toLocaleString("pt-BR")} Wp`],
+                        ].map(([label, value]) => (
+                          <div key={label} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                            <span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>{label}</span>
+                            <span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{value}</span>
+                          </div>
+                        ))}
+                        <div style={{ marginTop: 4 }}>
+                          <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 4 }}>STRINGS ({elec.strings.length})</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                            {elec.strings.map((s) => <span key={s} style={{ fontSize: 10.5, color: P.text, fontFamily: "monospace" }}>{s}</span>)}
+                          </div>
+                        </div>
+                        <button onClick={() => setSelectedCombiner(elec.combiner)} style={{
+                          marginTop: 8, alignSelf: "flex-start", background: P.card2, border: `1px solid ${P.border}`,
+                          color: P.info, borderRadius: 6, padding: "4px 9px", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit",
+                        }}>Ver combiner no mapa</button>
+                      </div>
+                    ) : (
+                      <div style={{ color: P.muted, fontSize: 11.5 }}>Dados elétricos ainda não cadastrados para este subcampo.</div>
+                    )}
+                  </div>
+                );
+              })() : (
+                <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver suas informações.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : isFocos ? (() => {
         const cyc = focoCycleKey(activeLayer);
         const bucketKey = focoKey(cyc, focoVisit);
         return (
