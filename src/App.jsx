@@ -527,12 +527,20 @@ function computeCombinerLayout(subKey) {
   }
 
   // Meia-altura (em metros) do tracker em H: padronizada pela mediana do
-  // subcampo em TODAS as fileiras — trackers grandes e uniformes, do mesmo
-  // jeito em qualquer ponto do subcampo. A posição da combiner (abaixo) é
-  // que se adapta pra não cair em cima de um tracker, não o contrário.
+  // subcampo (grande, uniforme) em quase todas as fileiras. Só encolhe numa
+  // fileira específica quando o vão real até a vizinha (norte OU sul) é
+  // genuinamente menor do que o necessário pra caber o tamanho padrão sem
+  // sobrepor — ex.: o trio mais ao norte do SM3.5, com vãos reais de
+  // 32-35m contra a mediana de 71m do subcampo. Nesses casos raros, cabe
+  // melhor um tracker um pouco menor do que um combiner em cima do tracker.
   const rowHalfHeightByY = new Map();
   const uniformHalfHeight = rowGap * TRACKER_H_HALF_FACTOR;
-  rowYs.forEach((rowY) => rowHalfHeightByY.set(rowY, uniformHalfHeight));
+  rowYs.forEach((rowY) => {
+    const { gapSouth, gapNorth } = neighborGaps(rowY);
+    const localGaps = [gapSouth, gapNorth].filter((g) => g != null);
+    const localMinGap = localGaps.length ? Math.min(...localGaps) : rowGap;
+    rowHalfHeightByY.set(rowY, Math.min(uniformHalfHeight, localMinGap * TRACKER_H_HALF_FACTOR));
+  });
 
   // Vão entre colunas medido DENTRO de cada fileira (não no X global): fileiras
   // com deslocamentos diferentes uma da outra fariam o X global intercalar
@@ -1081,8 +1089,13 @@ const TRACKER_LL = Object.fromEntries(
   ])
 );
 
-// Pre-compute subcampo outline polygons using real row structure of trackers
-const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
+// Pre-compute subcampo outline as a set of rectangular blocks (one quad per
+// block, not a single "staircase" polygon) using the real row structure of
+// trackers. Blocks avoid self-intersection entirely: when a subcampo's rows
+// vary a lot in width/offset (e.g. a row that pokes out much further than
+// its neighbors), a single traced outline can cross itself and make the SVG
+// fill exclude real area — a set of simple non-crossing rectangles can't.
+const SUBCAMPO_BLOCKS_LL = Object.fromEntries(SUB_KEYS.map((key) => {
   const trackers = PLANT[key].t;
 
   // Group trackers into rows by Y coordinate (5 m tolerance)
@@ -1137,13 +1150,12 @@ const SUBCAMPO_POLY_LL = Object.fromEntries(SUB_KEYS.map((key) => {
     }
   });
 
-  // Staircase polygon: trace left edge N→S, then right edge S→N
-  const utmPoly = [
-    ...blocks.flatMap((b) => [[b.minX - hx, b.yTop + hy], [b.minX - hx, b.yBottom - hy]]),
-    ...[...blocks].reverse().flatMap((b) => [[b.maxX + hx, b.yBottom - hy], [b.maxX + hx, b.yTop + hy]]),
-  ];
-
-  return [key, utmPoly.map(([x, y]) => utmToLatLon(x, y))];
+  // Cada bloco vira um quadrilátero simples e independente (sem "escada"
+  // única que possa se autocruzar quando as larguras variam muito).
+  return [key, blocks.map((b) => [
+    [b.minX - hx, b.yTop + hy], [b.maxX + hx, b.yTop + hy],
+    [b.maxX + hx, b.yBottom - hy], [b.minX - hx, b.yBottom - hy],
+  ].map(([x, y]) => utmToLatLon(x, y)))];
 }));
 
 // Zoom mínimo pra liberar os dots/tooltip do tracker no mapa geral (mesmo limiar dos dots, sem espera)
@@ -1198,13 +1210,11 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     const stat = isFocos ? { done: 0, prog: 0, total: 0, pending: 0 } : countDone(statuses, key, trackers, realLayer);
     const pct = stat.total ? stat.done / stat.total : 0;
 
-    const pixPoly = SUBCAMPO_POLY_LL[key].map((ll) => {
-      const p = toPixel(ll);
-      return { x: p.x, y: p.y };
-    });
-    const hullStr = pixPoly.map((p) => `${p.x},${p.y}`).join(" ");
-
-    const xs = pixPoly.map((p) => p.x), ys = pixPoly.map((p) => p.y);
+    const blockHullStrs = SUBCAMPO_BLOCKS_LL[key].map((quad) =>
+      quad.map((ll) => { const p = toPixel(ll); return `${p.x},${p.y}`; }).join(" ")
+    );
+    const allPix = SUBCAMPO_BLOCKS_LL[key].flatMap((quad) => quad.map((ll) => toPixel(ll)));
+    const xs = allPix.map((p) => p.x), ys = allPix.map((p) => p.y);
     const bx = Math.min(...xs), by = Math.min(...ys);
     const bw = Math.max(...xs) - bx, bh = Math.max(...ys) - by;
     const cx = bx + bw / 2, cy = by + bh / 2;
@@ -1218,7 +1228,7 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     const focoTotal = isFocos ? getFocoTotalAll(statuses, key, focoCycle, focoVisit) : 0;
     const activity = getActivity(statuses, key);
 
-    return { key, stat, pct, hullStr, bx, by, bw, bh, cx, cy, avgHeat, focoQty, activity };
+    return { key, stat, pct, blockHullStrs, bx, by, bw, bh, cx, cy, avgHeat, focoQty, activity };
   });
 
   const focoMax = isFocos ? Math.max(1, ...boxData.map((d) => d.focoQty)) : 1;
@@ -1248,15 +1258,17 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     >
       {isFocos ? (
         <>
-          {boxData.map(({ key, hullStr, focoQty, cx, cy, bw, bh }) => {
+          {boxData.map(({ key, blockHullStrs, focoQty, cx, cy, bw, bh }) => {
             const color = focoQtyColor(focoQty, focoMax);
             return (
             <g key={key}>
-              <polygon points={hullStr}
-                fill={focoQty > 0 ? color : "rgba(16,23,41,0.72)"}
-                opacity={focoQty > 0 ? 0.75 : 0.72}
-                stroke={focoQty > 0 ? color : P.border} strokeWidth={2}
-                style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
+              {blockHullStrs.map((hullStr, i) => (
+                <polygon key={i} points={hullStr}
+                  fill={focoQty > 0 ? color : "rgba(16,23,41,0.72)"}
+                  opacity={focoQty > 0 ? 0.75 : 0.72}
+                  stroke={focoQty > 0 ? color : P.border} strokeWidth={2}
+                  style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
+              ))}
               {bw > 24 && bh > 18 && (
                 <text x={cx} y={cy - fName * 0.3} fontSize={fName} fill="#fff" fontFamily="monospace"
                   fontWeight="700" textAnchor="middle" dominantBaseline="middle"
@@ -1277,11 +1289,11 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
         </>
       ) : heatmap ? (
         <>
-          {boxData.map(({ key, hullStr, avgHeat }) => (
-            <polygon key={key + "-r"} points={hullStr}
+          {boxData.flatMap(({ key, blockHullStrs, avgHeat }) => blockHullStrs.map((hullStr, i) => (
+            <polygon key={key + "-r" + i} points={hullStr}
               fill={heatColor(avgHeat)} opacity={0.88}
               style={{ pointerEvents: "auto", cursor: "pointer" }} onDoubleClick={() => onSelect(key)} />
-          ))}
+          )))}
           {boxData.map(({ key, cx, cy, avgHeat }) => (
             <g key={key + "-t"} style={{ pointerEvents: "none" }}>
               <text x={cx} y={cy - fPct * 0.30} fontSize={fName} fill="#fff" fontFamily="monospace"
@@ -1299,29 +1311,29 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
         </>
       ) : (
         <>
-          {boxData.map(({ key, hullStr }) => (
-            <polygon key={key + "-fill"} points={hullStr}
+          {boxData.flatMap(({ key, blockHullStrs }) => blockHullStrs.map((hullStr, i) => (
+            <polygon key={key + "-fill" + i} points={hullStr}
               fill="rgba(16,23,41,0.72)" stroke={P.border} strokeWidth={2}
               style={{ cursor: "pointer", pointerEvents: "auto" }} onDoubleClick={() => onSelect(key)} />
-          ))}
+          )))}
           {/* Contorno de atividade (roçagem/lavagem em andamento) — apenas na aba Trackers */}
-          {activeLayer === "trackers" && boxData.map(({ key, hullStr, activity }) => {
-            if (!activity.rocagem && !activity.lavagem) return null;
+          {activeLayer === "trackers" && boxData.flatMap(({ key, blockHullStrs, activity }) => {
+            if (!activity.rocagem && !activity.lavagem) return [];
             if (activity.rocagem && activity.lavagem) {
-              return (
-                <g key={key + "-act"} style={{ pointerEvents: "none" }}>
+              return blockHullStrs.map((hullStr, i) => (
+                <g key={key + "-act" + i} style={{ pointerEvents: "none" }}>
                   <polygon points={hullStr} fill="none" stroke={P.warn} strokeWidth={3}
                     strokeDasharray="10 10" strokeDashoffset={0} />
                   <polygon points={hullStr} fill="none" stroke={P.info} strokeWidth={3}
                     strokeDasharray="10 10" strokeDashoffset={10} />
                 </g>
-              );
+              ));
             }
-            return (
-              <polygon key={key + "-act"} points={hullStr} fill="none"
+            return blockHullStrs.map((hullStr, i) => (
+              <polygon key={key + "-act" + i} points={hullStr} fill="none"
                 stroke={activity.lavagem ? P.info : P.warn} strokeWidth={3}
                 style={{ pointerEvents: "none" }} />
-            );
+            ));
           })}
           {/* Pass 2: tracker dots (retângulo simples) ou trackers em H esticado (modo Combiners) */}
           {trackerDots.map(({ key, n, y, pt, val }) => {
