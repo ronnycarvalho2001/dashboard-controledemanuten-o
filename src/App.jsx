@@ -718,6 +718,36 @@ function computeCombinerLayout(subKey) {
 // Pré-computado uma única vez: layout de combiners por subcampo + lista geral
 // (usado pelo mapa geral de combiners).
 const COMBINER_LAYOUT_BY_SUBKEY = Object.fromEntries(SUB_KEYS.map((key) => [key, computeCombinerLayout(key)]));
+
+// Alinhamentos manuais entre SUBCAMPOS VIZINHOS: alguns pares de subcampo
+// compartilham a mesma fileira física na fronteira, mas com uma pequena
+// diferença de levantamento (poucos metros) que faz cada um calcular sua
+// própria fileira-topo/borda de forma independente — sem isso, uma combiner
+// de um lado da fronteira fica um vão inteiro deslocada da vizinha do outro
+// lado que, na prática, está na mesma linha. Cada entrada aqui força a(s)
+// combiner(s) [subKey, id] a usar a MESMA posição Y já calculada pra
+// [refSubKey, refId], confirmado manualmente contra a planta real.
+const CROSS_SUBCAMPO_LINE_ALIGN = [
+  { refSubKey: "4.1", refId: "SM4-CJ-1.2-03", targets: [
+    ["4.2", "SM4-CJ-2.1-01"], ["4.2", "SM4-CJ-2.1-02"], ["4.2", "SM4-CJ-2.1-03"],
+    ["4.2", "SM4-CJ-2.2-01"], ["4.2", "SM4-CJ-2.2-02"], ["4.2", "SM4-CJ-2.2-03"],
+  ] },
+  { refSubKey: "4.4", refId: "SM4-CJ-4.1-15", targets: [
+    ["4.3", "SM4-CJ-3.1-16"], ["4.3", "SM4-CJ-3.1-17"],
+    ["4.3", "SM4-CJ-3.2-14"], ["4.3", "SM4-CJ-3.2-15"], ["4.3", "SM4-CJ-3.2-16"],
+  ] },
+];
+CROSS_SUBCAMPO_LINE_ALIGN.forEach(({ refSubKey, refId, targets }) => {
+  const ref = COMBINER_LAYOUT_BY_SUBKEY[refSubKey] && COMBINER_LAYOUT_BY_SUBKEY[refSubKey].byId.get(refId);
+  if (!ref) return;
+  targets.forEach(([subKey, id]) => {
+    const target = COMBINER_LAYOUT_BY_SUBKEY[subKey] && COMBINER_LAYOUT_BY_SUBKEY[subKey].byId.get(id);
+    if (!target) return;
+    target.y = ref.y;
+    target.ll = utmToLatLon(target.x, target.y);
+  });
+});
+
 const ALL_COMBINERS = SUB_KEYS.flatMap((key) => COMBINER_LAYOUT_BY_SUBKEY[key].combiners);
 function trackerCombinerId(key, n) {
   const layout = COMBINER_LAYOUT_BY_SUBKEY[key];
