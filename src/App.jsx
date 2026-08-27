@@ -596,12 +596,20 @@ function computeCombinerLayout(subKey) {
     const cMinX = Math.min(...pts.map((p) => p.x));
     const cMaxX = Math.max(...pts.map((p) => p.x));
     // Só entram como "vizinhas" linhas cujo intervalo de X realmente toca o
-    // intervalo de X dessa combiner — uma linha que mora numa faixa de X
-    // totalmente diferente (outro canto/ilha do talhão) não bloqueia nada,
-    // mesmo que apareça logo ali na lista global N→S de Y.
+    // intervalo de X das linhas em que essa combiner toca (a linha INTEIRA
+    // que ela ancora, não só a fatia de 4 trackers dela) — uma linha que mora
+    // numa faixa de X totalmente diferente (outro canto/ilha do talhão) não
+    // bloqueia nada, mesmo que apareça logo ali na lista global N→S de Y.
+    // Usar a linha inteira (não só os 4 trackers dessa combiner) garante que
+    // toda combiner ancorada na mesma linha enxergue as mesmas vizinhas e
+    // termine na mesma posição, mesmo que só uma parte da linha realmente
+    // encoste na vizinha.
+    const touchedRanges = uniqueYs.map((gy) => groupXRangeByY.get(gy)).filter(Boolean);
+    const refMinX = Math.min(...touchedRanges.map((r) => r.minX));
+    const refMaxX = Math.max(...touchedRanges.map((r) => r.maxX));
     const localRows = groupYs.filter((ry) => {
       const r = groupXRangeByY.get(ry);
-      return r && r.minX <= cMaxX && r.maxX >= cMinX;
+      return r && r.minX <= refMaxX && r.maxX >= refMinX;
     });
 
     function findLandingGap(startRowY, dir) {
@@ -658,23 +666,20 @@ function computeCombinerLayout(subKey) {
     if (y == null) {
       // Anda pros dois lados (só entre fileiras vizinhas de verdade em X) até
       // achar um vão real grande o bastante pra não encostar em nenhum
-      // tracker; usa o lado que exigir MENOS deslocamento (mais perto da
-      // própria fileira). Se nenhuma fileira vizinha em X existir de um lado
-      // ou dos dois (caso comum: fileira isolada, sem nada perto), cai bem
-      // pertinho da própria fileira (metade da mediana), só o suficiente pra
-      // não encostar nela mesma.
+      // tracker. Prefere sempre o SUL quando os dois lados são seguros —
+      // convenção consistente pro campo inteiro, e garante que toda combiner
+      // ancorada na mesma linha (mesmo vindo de metades diferentes de uma
+      // linha partida) escolha o mesmo lado. Se nenhuma fileira vizinha em X
+      // existir de um lado ou dos dois (caso comum: fileira isolada, sem nada
+      // perto), cai bem pertinho da própria fileira (metade da mediana), só o
+      // suficiente pra não encostar nela mesma.
       const south = findLandingGap(rowY, 1);
       const north = findLandingGap(rowY, -1);
       const ySouthCand = south.gap != null ? south.landingY - south.gap * COMBINER_NUDGE_FACTOR : south.landingY - rowGap * COMBINER_NUDGE_FACTOR;
       const yNorthCand = north.gap != null ? north.landingY + north.gap * COMBINER_NUDGE_FACTOR : north.landingY + rowGap * COMBINER_NUDGE_FACTOR;
       const southOk = south.gap != null, northOk = north.gap != null;
-      // Ancorada numa linha partida (metades leste/oeste do mesmo talhão):
-      // sempre pro mesmo lado (norte) que as outras combiners dessa linha,
-      // não o lado com menos deslocamento — senão metades diferentes da
-      // mesma linha acabam em lados opostos.
-      const anchorIsSplitLine = (groupSizeByGroupY.get(rowY) || 1) > 1;
       if (southOk && northOk) {
-        y = anchorIsSplitLine ? yNorthCand : (Math.abs(ySouthCand - rowY) <= Math.abs(yNorthCand - rowY) ? ySouthCand : yNorthCand);
+        y = ySouthCand;
       } else if (southOk) {
         y = ySouthCand;
       } else if (northOk) {
