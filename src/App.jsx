@@ -579,7 +579,7 @@ function computeCombinerLayout(subKey) {
     byCombiner.get(elec.combiner).trackers.push(n);
   });
 
-  const combiners = [...byCombiner.values()].map((c) => {
+  const prepared = [...byCombiner.values()].map((c) => {
     const pts = c.trackers.map((n) => posByN.get(n)).filter(Boolean);
     const avgX = pts.reduce((s, p) => s + p.x, 0) / pts.length;
     // Ancora nas LINHAS lógicas (fileiras já agrupadas), não na fileira crua —
@@ -587,12 +587,6 @@ function computeCombinerLayout(subKey) {
     // mesma linha (e portanto a mesma posição) que uma combiner vizinha que
     // só toca a metade oeste dessa mesma linha física.
     const uniqueYs = [...new Set(pts.map((p) => groupYByRowY.get(p.y)))];
-    // Combiner entre duas fileiras ADJACENTES: fica no meio do vão real.
-    // Combiner numa fileira só (ou entre fileiras que pulam uma fileira
-    // alheia no meio — caso raro de talhão): ancora na fileira com mais
-    // trackers dessa combiner e desloca pro vão vazio mais próximo, usando
-    // o vão REAL (norte ou sul) daquela fileira — nunca uma média global,
-    // pra não cair em cima de uma fileira que não é dessa combiner.
     const cMinX = Math.min(...pts.map((p) => p.x));
     const cMaxX = Math.max(...pts.map((p) => p.x));
     // Só entram como "vizinhas" linhas cujo intervalo de X realmente toca o
@@ -600,10 +594,6 @@ function computeCombinerLayout(subKey) {
     // que ela ancora, não só a fatia de 4 trackers dela) — uma linha que mora
     // numa faixa de X totalmente diferente (outro canto/ilha do talhão) não
     // bloqueia nada, mesmo que apareça logo ali na lista global N→S de Y.
-    // Usar a linha inteira (não só os 4 trackers dessa combiner) garante que
-    // toda combiner ancorada na mesma linha enxergue as mesmas vizinhas e
-    // termine na mesma posição, mesmo que só uma parte da linha realmente
-    // encoste na vizinha.
     const touchedRanges = uniqueYs.map((gy) => groupXRangeByY.get(gy)).filter(Boolean);
     const refMinX = Math.min(...touchedRanges.map((r) => r.minX));
     const refMaxX = Math.max(...touchedRanges.map((r) => r.maxX));
@@ -612,23 +602,6 @@ function computeCombinerLayout(subKey) {
       return r && r.minX <= refMaxX && r.maxX >= refMinX;
     });
 
-    function findLandingGap(startRowY, dir) {
-      let idx = localRows.indexOf(startRowY);
-      while (true) {
-        let nj = idx;
-        let stepGap = 0;
-        do {
-          nj += dir;
-          if (nj < 0 || nj >= localRows.length) return { landingY: localRows[idx], gap: null };
-          stepGap = Math.abs(localRows[nj] - localRows[idx]);
-        } while (stepGap < rowGap * 0.2);
-        const gap = Math.abs(localRows[nj] - localRows[idx]);
-        if (gap >= MIN_SAFE_GAP) return { landingY: localRows[idx], gap };
-        idx = nj;
-      }
-    }
-
-    let y;
     const sortedYs = [...uniqueYs].sort((a, b) => b - a);
     const yNorth = sortedYs[0], ySouth = sortedYs[sortedYs.length - 1];
     const idxNorthLocal = localRows.indexOf(yNorth), idxSouthLocal = localRows.indexOf(ySouth);
@@ -638,12 +611,21 @@ function computeCombinerLayout(subKey) {
     // vão livre pro lado, não ficar "presa" no meio com a fileira vizinha).
     const northIsSplitLine = (groupSizeByGroupY.get(yNorth) || 1) > 1;
     const southIsSplitLine = (groupSizeByGroupY.get(ySouth) || 1) > 1;
-    let rowY;
+    let rowY = null;
+    let isMidpointPair = false;
     if (uniqueYs.length >= 2 && idxSouthLocal - idxNorthLocal === 1 && !northIsSplitLine && !southIsSplitLine) {
-      rowY = null; // decidido abaixo, caso o vão direto não seja seguro
+      // Combiner entre duas fileiras REALMENTE adjacentes: se o vão dá pra
+      // caber com folga, fica exatamente no meio das próprias fileiras que
+      // ela atende — posição mais natural.
+      const directGap = yNorth - ySouth;
+      if (directGap >= (uniformHalfHeight * 2) * 1.02) isMidpointPair = true;
+      else rowY = yNorth; // ancora na fileira norte e busca vão seguro a partir dela
     } else if (uniqueYs.length === 1) {
       rowY = uniqueYs[0];
     } else {
+      // Combiner numa fileira só (ou entre fileiras que pulam uma fileira
+      // alheia no meio — caso raro de talhão): ancora na fileira com mais
+      // trackers dessa combiner.
       const countByY = new Map();
       pts.forEach((p) => {
         const gy = groupYByRowY.get(p.y);
@@ -651,36 +633,60 @@ function computeCombinerLayout(subKey) {
       });
       rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
     }
-    // Combiner entre duas fileiras REALMENTE adjacentes (dentre as que de fato
-    // ficam perto em X): se o vão dá pra caber com folga, fica exatamente no
-    // meio das próprias fileiras que ela atende — posição mais natural.
-    // Senão, cai no tratamento de "andar até achar vão seguro" abaixo.
-    if (rowY == null) {
-      const directGap = yNorth - ySouth;
-      if (directGap >= (uniformHalfHeight * 2) * 1.02) {
-        y = (yNorth + ySouth) / 2;
-      } else {
-        rowY = yNorth; // ancora na fileira norte e busca vão seguro a partir dela
-      }
-    }
-    if (y == null) {
+    return { c, avgX, uniqueYs, yNorth, ySouth, localRows, rowY, isMidpointPair, cMinX, cMaxX };
+  });
+
+  // Vão entre duas fileiras já usado por outra combiner como par direto
+  // (meio do vão) — uma combiner "extra" que só toca UMA dessas duas
+  // fileiras (não tem tracker do outro lado, mas está na MESMA fileira que
+  // uma vizinha que já forma esse par) usa a mesma posição dessa vizinha em
+  // vez de procurar seu próprio vão sozinha — fica "do lado"/"na mesma
+  // linha" dela, como o arranjo elétrico real exige.
+  const establishedMidpointByRowY = new Map();
+  prepared.forEach((p) => {
+    if (!p.isMidpointPair) return;
+    const mid = (p.yNorth + p.ySouth) / 2;
+    if (!establishedMidpointByRowY.has(p.yNorth)) establishedMidpointByRowY.set(p.yNorth, mid);
+    if (!establishedMidpointByRowY.has(p.ySouth)) establishedMidpointByRowY.set(p.ySouth, mid);
+  });
+
+  const combiners = prepared.map((p) => {
+    const { c, avgX, localRows, yNorth, ySouth, isMidpointPair, cMinX, cMaxX } = p;
+    const rowY = p.rowY;
+    let y;
+    if (isMidpointPair) {
+      y = (yNorth + ySouth) / 2;
+    } else if (establishedMidpointByRowY.has(rowY)) {
+      y = establishedMidpointByRowY.get(rowY);
+    } else {
       // Anda pros dois lados (só entre fileiras vizinhas de verdade em X) até
       // achar um vão real grande o bastante pra não encostar em nenhum
-      // tracker. Prefere sempre o SUL quando os dois lados são seguros —
-      // convenção consistente pro campo inteiro, e garante que toda combiner
-      // ancorada na mesma linha (mesmo vindo de metades diferentes de uma
-      // linha partida) escolha o mesmo lado. Se nenhuma fileira vizinha em X
-      // existir de um lado ou dos dois (caso comum: fileira isolada, sem nada
-      // perto), cai bem pertinho da própria fileira (metade da mediana), só o
-      // suficiente pra não encostar nela mesma.
+      // tracker. Prefere sempre o SUL quando disponível — convenção
+      // consistente pro campo inteiro. Se nenhuma fileira vizinha em X
+      // existir de um lado ou dos dois (caso comum: fileira isolada, sem
+      // nada perto), cai bem pertinho da própria fileira (metade da
+      // mediana), só o suficiente pra não encostar nela mesma.
+      function findLandingGap(startRowY, dir) {
+        let idx = localRows.indexOf(startRowY);
+        while (true) {
+          let nj = idx;
+          let stepGap = 0;
+          do {
+            nj += dir;
+            if (nj < 0 || nj >= localRows.length) return { landingY: localRows[idx], gap: null };
+            stepGap = Math.abs(localRows[nj] - localRows[idx]);
+          } while (stepGap < rowGap * 0.2);
+          const gap = Math.abs(localRows[nj] - localRows[idx]);
+          if (gap >= MIN_SAFE_GAP) return { landingY: localRows[idx], gap };
+          idx = nj;
+        }
+      }
       const south = findLandingGap(rowY, 1);
       const north = findLandingGap(rowY, -1);
       const ySouthCand = south.gap != null ? south.landingY - south.gap * COMBINER_NUDGE_FACTOR : south.landingY - rowGap * COMBINER_NUDGE_FACTOR;
       const yNorthCand = north.gap != null ? north.landingY + north.gap * COMBINER_NUDGE_FACTOR : north.landingY + rowGap * COMBINER_NUDGE_FACTOR;
       const southOk = south.gap != null, northOk = north.gap != null;
-      if (southOk && northOk) {
-        y = ySouthCand;
-      } else if (southOk) {
+      if (southOk) {
         y = ySouthCand;
       } else if (northOk) {
         y = yNorthCand;
