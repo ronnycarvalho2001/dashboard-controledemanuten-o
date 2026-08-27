@@ -480,16 +480,65 @@ function GroupPanel({ geo, subKey, statuses, activeLayer, onBulk, readOnly }) {
    TRACKER_ELECTRICAL), posicionando a combiner no vão entre as fileiras
    que ela atende — exatamente onde ela fica fisicamente no campo.
    ──────────────────────────────────────────────────────────────────── */
+// Fração do vão entre fileiras ocupada pela METADE da altura do tracker em H,
+// e fração usada pra afastar uma combiner de fileira única da fileira. O fator
+// da combiner tem que ser maior que o do tracker (com folga) senão a combiner
+// cai em cima do próprio tracker em vez de ficar no vão de terra vazio.
+const TRACKER_H_HALF_FACTOR = 0.36;
+const COMBINER_NUDGE_FACTOR = 0.46;
+
 function computeCombinerLayout(subKey) {
   const trackers = PLANT[subKey].t;
   const posByN = new Map(trackers.map(([n, x, y]) => [n, { x, y }]));
+
+  // Fileiras N→S. Usamos a MEDIANA do vão entre fileiras (não o mínimo):
+  // alguns subcampos têm uma fileira quase duplicada (poucos metros de
+  // distância, resto de um recorte de talhão) que faria o mínimo cair pra
+  // quase zero e estragar o posicionamento/tamanho em todo o subcampo.
   const rowYs = [...new Set(trackers.map(([, , y]) => y))].sort((a, b) => b - a);
-  let minGap = Infinity;
+  const rowGaps = [];
   for (let i = 1; i < rowYs.length; i++) {
     const d = rowYs[i - 1] - rowYs[i];
-    if (d > 0 && d < minGap) minGap = d;
+    if (d > 0) rowGaps.push(d);
   }
-  if (!Number.isFinite(minGap)) minGap = 70;
+  const rowGap = median(rowGaps) || 70;
+
+  function neighborGaps(rowY) {
+    const idx = rowYs.indexOf(rowY);
+    const gapSouth = idx < rowYs.length - 1 ? rowY - rowYs[idx + 1] : null;
+    const gapNorth = idx > 0 ? rowYs[idx - 1] - rowY : null;
+    return { gapSouth, gapNorth };
+  }
+
+  // Meia-altura (em metros) do tracker em H em CADA fileira, limitada ao menor
+  // vão vizinho REAL daquela fileira específica — não a mediana do subcampo.
+  // Sem isso, fileiras excepcionalmente próximas (recorte de talhão) fariam o
+  // tracker "vazar" para cima do vão vizinho.
+  const rowHalfHeightByY = new Map();
+  rowYs.forEach((rowY) => {
+    const { gapSouth, gapNorth } = neighborGaps(rowY);
+    const localGap = gapSouth != null && gapNorth != null ? Math.min(gapSouth, gapNorth)
+      : gapSouth ?? gapNorth ?? rowGap;
+    rowHalfHeightByY.set(rowY, localGap * TRACKER_H_HALF_FACTOR);
+  });
+
+  // Vão entre colunas medido DENTRO de cada fileira (não no X global): fileiras
+  // com deslocamentos diferentes uma da outra fariam o X global intercalar
+  // valores de fileiras distintas e gerar vãos artificialmente pequenos.
+  const xsByRow = new Map();
+  trackers.forEach(([, x, y]) => {
+    if (!xsByRow.has(y)) xsByRow.set(y, []);
+    xsByRow.get(y).push(x);
+  });
+  const colGaps = [];
+  xsByRow.forEach((xs) => {
+    xs.sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) {
+      const d = xs[i] - xs[i - 1];
+      if (d > 0) colGaps.push(d);
+    }
+  });
+  const colGap = median(colGaps) || 11;
 
   const byCombiner = new Map();
   trackers.forEach(([n]) => {
@@ -505,11 +554,36 @@ function computeCombinerLayout(subKey) {
     const pts = c.trackers.map((n) => posByN.get(n)).filter(Boolean);
     const avgX = pts.reduce((s, p) => s + p.x, 0) / pts.length;
     const uniqueYs = [...new Set(pts.map((p) => p.y))];
-    // Combiner entre duas fileiras: fica no meio do vão. Combiner numa
-    // fileira só: desloca pro vão vazio mais próximo (onde não há tracker).
-    const y = uniqueYs.length >= 2
-      ? (Math.max(...uniqueYs) + Math.min(...uniqueYs)) / 2
-      : uniqueYs[0] - minGap * 0.32;
+    // Combiner entre duas fileiras ADJACENTES: fica no meio do vão real.
+    // Combiner numa fileira só (ou entre fileiras que pulam uma fileira
+    // alheia no meio — caso raro de talhão): ancora na fileira com mais
+    // trackers dessa combiner e desloca pro vão vazio mais próximo, usando
+    // o vão REAL (norte ou sul) daquela fileira — nunca uma média global,
+    // pra não cair em cima de uma fileira que não é dessa combiner.
+    let y;
+    const sortedYs = [...uniqueYs].sort((a, b) => b - a);
+    const yNorth = sortedYs[0], ySouth = sortedYs[sortedYs.length - 1];
+    const idxNorth = rowYs.indexOf(yNorth), idxSouth = rowYs.indexOf(ySouth);
+    if (uniqueYs.length >= 2 && idxSouth - idxNorth === 1) {
+      y = (yNorth + ySouth) / 2;
+    } else {
+      let rowY;
+      if (uniqueYs.length === 1) {
+        rowY = uniqueYs[0];
+      } else {
+        const countByY = new Map();
+        pts.forEach((p) => countByY.set(p.y, (countByY.get(p.y) || 0) + 1));
+        rowY = [...countByY.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      }
+      const { gapSouth, gapNorth } = neighborGaps(rowY);
+      const otherIsSouth = uniqueYs.length >= 2 && rowY === yNorth;
+      const otherIsNorth = uniqueYs.length >= 2 && rowY === ySouth;
+      if (otherIsSouth && gapSouth != null) y = rowY - gapSouth * COMBINER_NUDGE_FACTOR;
+      else if (otherIsNorth && gapNorth != null) y = rowY + gapNorth * COMBINER_NUDGE_FACTOR;
+      else y = gapSouth != null ? rowY - gapSouth * COMBINER_NUDGE_FACTOR
+        : gapNorth != null ? rowY + gapNorth * COMBINER_NUDGE_FACTOR
+        : rowY - rowGap * COMBINER_NUDGE_FACTOR;
+    }
     const stringCount = c.trackers.reduce((s, n) => {
       const e = getTrackerElectrical(subKey, n);
       return s + (e ? e.strings.length : 0);
@@ -520,94 +594,16 @@ function computeCombinerLayout(subKey) {
   const trackerToCombiner = new Map();
   combiners.forEach((c) => c.trackers.forEach((n) => trackerToCombiner.set(n, c.id)));
   const byId = new Map(combiners.map((c) => [c.id, c]));
-  return { combiners, trackerToCombiner, byId, minGap };
+  return { combiners, trackerToCombiner, byId, rowGap, colGap, rowHalfHeightByY };
 }
 
 // Pré-computado uma única vez: layout de combiners por subcampo + lista geral
-// (usada tanto no mapa individual quanto no mapa geral de combiners).
+// (usado pelo mapa geral de combiners).
 const COMBINER_LAYOUT_BY_SUBKEY = Object.fromEntries(SUB_KEYS.map((key) => [key, computeCombinerLayout(key)]));
 const ALL_COMBINERS = SUB_KEYS.flatMap((key) => COMBINER_LAYOUT_BY_SUBKEY[key].combiners);
 function trackerCombinerId(key, n) {
   const layout = COMBINER_LAYOUT_BY_SUBKEY[key];
   return (layout && layout.trackerToCombiner.get(n)) || null;
-}
-function useCombinerLayout(subKey) {
-  return COMBINER_LAYOUT_BY_SUBKEY[subKey];
-}
-
-/* ════════════════════════════════════════════════════════════════════════
-   MAPA DE COMBINERS — trackers em formato de H esticado + posição das CBs
-   ════════════════════════════════════════════════════════════════════════ */
-function CombinersMap({
-  geo, subKey, combinerLayout, selected, onTrackerClick,
-  selectedCombiner, hoveredCombiner, onCombinerClick, onCombinerHover, scale,
-}) {
-  const { trackers, minX, maxY, W, H, pad, padTop, col } = geo;
-  const { minGap, trackerToCombiner, byId, combiners } = combinerLayout;
-  const toX = (x) => x - minX + pad;
-  const toY = (y) => maxY - y + padTop;
-
-  const markerW = col * 0.52;
-  const markerH = minGap * 0.76;
-  const railW = markerW * 0.2;
-  const hubH = markerH * 0.045;
-  const cbSize = col * 0.5;
-
-  const vW = W / scale, vH = H / scale;
-  const vX = (W - vW) / 2, vY = (H - vH) / 2;
-  const sw = Math.max(W, H);
-
-  const highlighted = selectedCombiner ? byId.get(selectedCombiner) : null;
-  const highlightSet = highlighted ? new Set(highlighted.trackers) : null;
-  const hoveredCombinerData = hoveredCombiner ? byId.get(hoveredCombiner) : null;
-  const hoveredSet = hoveredCombinerData ? new Set(hoveredCombinerData.trackers) : null;
-
-  return (
-    <svg width="100%" height="100%" viewBox={`${vX} ${vY} ${vW} ${vH}`} preserveAspectRatio="xMidYMid meet" style={{ display: "block", cursor: "default" }}>
-      {trackers.map(([n, x, y]) => {
-        const cx = toX(x), cy = toY(y);
-        const left = cx - markerW / 2, top = cy - markerH / 2;
-        const isSel = selected === n;
-        const isHighlighted = highlightSet && highlightSet.has(n);
-        const isHovered = hoveredSet && hoveredSet.has(n);
-        const combId = trackerToCombiner.get(n);
-        const fill = isHighlighted ? P.warn : isHovered ? P.info : "#3a4668";
-        return (
-          <g key={n} fill={fill}
-            stroke={isSel ? P.text : "rgba(0,0,0,0.45)"}
-            strokeWidth={isSel ? sw * 0.0026 : sw * 0.0004}
-            style={{ cursor: "pointer" }}
-            onClick={() => onTrackerClick(n)}
-          >
-            <title>{`${trackerId(subKey, n)}${combId ? `  •  ${combId}` : ""}`}</title>
-            <rect x={left} y={top} width={railW} height={markerH} rx={railW * 0.4} />
-            <rect x={left + markerW - railW} y={top} width={railW} height={markerH} rx={railW * 0.4} />
-            <rect x={left} y={cy - hubH / 2} width={markerW} height={hubH} rx={hubH * 0.4} />
-          </g>
-        );
-      })}
-
-      {combiners.map((c) => {
-        const cx = toX(c.x), cy = toY(c.y);
-        const isSel = selectedCombiner === c.id;
-        const isHover = hoveredCombiner === c.id;
-        return (
-          <g key={c.id}
-            onMouseEnter={() => onCombinerHover(c.id)}
-            onMouseLeave={() => onCombinerHover(null)}
-            onClick={(e) => { e.stopPropagation(); onCombinerClick(c.id); }}
-            style={{ cursor: "pointer" }}
-          >
-            <title>{`${c.id}\nInversor: ${c.inversor}\nTrackers: ${c.trackerCount}  •  Strings: ${c.stringCount}\n${c.trackers.map((n) => trackerId(subKey, n)).join(", ")}`}</title>
-            <rect x={cx - cbSize / 2} y={cy - cbSize / 2} width={cbSize} height={cbSize} rx={cbSize * 0.22}
-              fill={isSel ? P.warn : isHover ? P.info : P.card2}
-              stroke={isSel ? P.warn : isHover ? P.info : P.border}
-              strokeWidth={sw * 0.0018} />
-          </g>
-        );
-      })}
-    </svg>
-  );
 }
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -642,7 +638,7 @@ function RangeTool({ activeLayer, onApply }) {
 /* ════════════════════════════════════════════════════════════════════════
    VISÃO DE UM SUBCAMPO
    ════════════════════════════════════════════════════════════════════════ */
-function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLayer, onNavigate, readOnly, focoType, setFocoType, focoVisit, setFocoVisit, combinersMode, setCombinersMode }) {
+function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLayer, onNavigate, readOnly, focoType, setFocoType, focoVisit, setFocoVisit }) {
   const geo = useSubGeometry(subKey);
   const [filter, setFilter] = useState(null);
   const [showGroups, setShowGroups] = useState(true);
@@ -650,21 +646,12 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
   const [lastClicked, setLastClicked] = useState(null);
   const [scale, setScale] = useState(1);
   const [editTrackers, setEditTrackers] = useState(false);
-  const [selectedCombiner, setSelectedCombiner] = useState(null);
-  const [hoveredCombiner, setHoveredCombiner] = useState(null);
-  const combinerLayout = useCombinerLayout(subKey);
   const containerRef = useRef(null);
 
   // Sai do modo edição sempre que a aba Trackers deixa de estar ativa, pra evitar deixar "armado" sem querer
   useEffect(() => {
     if (activeLayer !== "trackers") setEditTrackers(false);
   }, [activeLayer]);
-
-  // Limpa a seleção de combiner ao trocar de subcampo ou sair do modo
-  useEffect(() => {
-    setSelectedCombiner(null);
-    setHoveredCombiner(null);
-  }, [subKey, combinersMode]);
 
   const handleWheel = useCallback((e) => {
     e.preventDefault();
@@ -776,117 +763,10 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           }}>
             Trackers
           </button>
-          <button onClick={() => setCombinersMode((v) => !v)} style={{
-            padding: "4px 10px", borderRadius: 7,
-            border: `1px solid ${combinersMode ? P.info + "66" : P.border}`,
-            cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: combinersMode ? P.info + "22" : "transparent",
-            color: combinersMode ? P.info : P.muted, transition: "all .12s",
-          }}>
-            Mapa de Combiners
-          </button>
         </div>
       </div>
 
-      {combinersMode ? (
-        <div style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
-          <div ref={containerRef} onWheel={handleWheel} style={{
-            flex: "2 1 420px", background: P.surface, border: `1px solid ${P.border}`, borderRadius: 12,
-            padding: 12, overflow: "hidden", position: "relative",
-          }}>
-            <div style={{ position: "absolute", top: 10, right: 10, zIndex: 2, display: "flex", gap: 6 }}>
-              <button onClick={() => setScale((s) => Math.min(8, s * 1.1))} style={zoomBtnStyle}>＋</button>
-              <button onClick={() => setScale((s) => Math.max(1, s / 1.1))} style={zoomBtnStyle}>－</button>
-            </div>
-            <CombinersMap geo={geo} subKey={subKey} combinerLayout={combinerLayout}
-              selected={selected} onTrackerClick={(n) => setSelected(n)}
-              selectedCombiner={selectedCombiner} hoveredCombiner={hoveredCombiner}
-              onCombinerClick={(id) => setSelectedCombiner((cur) => cur === id ? null : id)}
-              onCombinerHover={setHoveredCombiner}
-              scale={scale} />
-          </div>
-
-          <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
-            <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>MAPA DE COMBINERS</div>
-              <div style={{ color: P.muted, fontSize: 11.5, lineHeight: 1.5 }}>
-                Clique em um quadrado para destacar os trackers ligados àquela combiner. Passe o cursor por cima para ver os dados. Clique em um tracker para ver suas informações elétricas.
-              </div>
-              <div style={{ display: "flex", gap: 12, marginTop: 10, fontSize: 10.5, color: P.muted, flexWrap: "wrap" }}>
-                <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: P.card2, border: `1px solid ${P.border}`, marginRight: 5, verticalAlign: "middle" }} />Combiner</span>
-                <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: P.warn, marginRight: 5, verticalAlign: "middle" }} />Selecionada</span>
-                <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: P.info, marginRight: 5, verticalAlign: "middle" }} />Em destaque (hover)</span>
-              </div>
-            </div>
-
-            {selectedCombiner && combinerLayout.byId.get(selectedCombiner) && (() => {
-              const c = combinerLayout.byId.get(selectedCombiner);
-              return (
-                <div style={{ background: P.card, border: `1px solid ${P.warn}55`, borderRadius: 12, padding: 14 }}>
-                  <div style={{ color: P.warn, fontWeight: 700, fontSize: 13, marginBottom: 8, fontFamily: "monospace" }}>{c.id}</div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 10 }}>
-                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Inversor</span><span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{c.inversor}</span></div>
-                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Trackers</span><span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{c.trackerCount}</span></div>
-                    <div style={{ display: "flex", gap: 8 }}><span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Strings</span><span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{c.stringCount}</span></div>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 4 }}>TRACKERS LIGADOS</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                    {c.trackers.map((n) => (
-                      <button key={n} onClick={() => setSelected(n)} style={{
-                        background: selected === n ? P.accentG : P.card2, border: `1px solid ${selected === n ? P.accent : P.border}`,
-                        color: selected === n ? P.accent : P.text, borderRadius: 6, padding: "3px 7px",
-                        fontSize: 10.5, fontFamily: "monospace", cursor: "pointer",
-                      }}>{trackerId(subKey, n)}</button>
-                    ))}
-                  </div>
-                </div>
-              );
-            })()}
-
-            <div style={{ background: P.card, border: `1px solid ${P.purple}55`, borderRadius: 12, padding: 14 }}>
-              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>INFORMAÇÕES DO TRACKER</div>
-              {selected != null ? (() => {
-                const elec = getTrackerElectrical(subKey, selected);
-                return (
-                  <div>
-                    <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 10, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
-                    {elec ? (
-                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                        {[
-                          ["Inversor", elec.inversor],
-                          ["Combiner box", elec.combiner],
-                          ["Potência do módulo", `${elec.potModulo} W`],
-                          ["Módulos / string", elec.qtdModulos],
-                          ["Potência da string", `${elec.potString.toLocaleString("pt-BR")} Wp`],
-                        ].map(([label, value]) => (
-                          <div key={label} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                            <span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>{label}</span>
-                            <span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{value}</span>
-                          </div>
-                        ))}
-                        <div style={{ marginTop: 4 }}>
-                          <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 4 }}>STRINGS ({elec.strings.length})</div>
-                          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-                            {elec.strings.map((s) => <span key={s} style={{ fontSize: 10.5, color: P.text, fontFamily: "monospace" }}>{s}</span>)}
-                          </div>
-                        </div>
-                        <button onClick={() => setSelectedCombiner(elec.combiner)} style={{
-                          marginTop: 8, alignSelf: "flex-start", background: P.card2, border: `1px solid ${P.border}`,
-                          color: P.info, borderRadius: 6, padding: "4px 9px", fontSize: 10.5, cursor: "pointer", fontFamily: "inherit",
-                        }}>Ver combiner no mapa</button>
-                      </div>
-                    ) : (
-                      <div style={{ color: P.muted, fontSize: 11.5 }}>Dados elétricos ainda não cadastrados para este subcampo.</div>
-                    )}
-                  </div>
-                );
-              })() : (
-                <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver suas informações.</div>
-              )}
-            </div>
-          </div>
-        </div>
-      ) : isFocos ? (() => {
+      {isFocos ? (() => {
         const cyc = focoCycleKey(activeLayer);
         const bucketKey = focoKey(cyc, focoVisit);
         return (
@@ -1182,7 +1062,7 @@ const PLANT_CENTER_LL = utmToLatLon(457786, 9633887);
 const TRACKER_LL = Object.fromEntries(
   SUB_KEYS.map((key) => [
     key,
-    PLANT[key].t.map(([n, x, y]) => ({ n, ll: utmToLatLon(x, y) })),
+    PLANT[key].t.map(([n, x, y]) => ({ n, y, ll: utmToLatLon(x, y) })),
   ])
 );
 
@@ -1267,6 +1147,18 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
 
   const toPixel = (ll) => map.latLngToContainerPoint(L.latLng(ll[0], ll[1]));
 
+  // Escala px/metro no zoom atual (praticamente constante na extensão da usina),
+  // usada só no modo Combiners pra desenhar os trackers em H no tamanho real.
+  let pxPerMeterX = 1, pxPerMeterY = 1;
+  if (combinersMode) {
+    const refE = 457786, refN = 9633887;
+    const pRef = toPixel(PLANT_CENTER_LL);
+    const pRefE = toPixel(utmToLatLon(refE + 200, refN));
+    const pRefN = toPixel(utmToLatLon(refE, refN + 200));
+    pxPerMeterX = Math.hypot(pRefE.x - pRef.x, pRefE.y - pRef.y) / 200;
+    pxPerMeterY = Math.hypot(pRefN.x - pRef.x, pRefN.y - pRef.y) / 200;
+  }
+
   const boxData = SUB_KEYS.map((key) => {
     const trackers = PLANT[key].t;
     const stat = isFocos ? { done: 0, prog: 0, total: 0, pending: 0 } : countDone(statuses, key, trackers, realLayer);
@@ -1304,10 +1196,10 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   const sw = Math.max(0.5, fPct * 0.05);
 
   const trackerDots = (!isFocos && !heatmap && zoom > 15)
-    ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, ll }) => {
+    ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, y, ll }) => {
         const pt = toPixel(ll);
         const val = getStatus(statuses, key, n)[idx];
-        return { key, n, pt, val };
+        return { key, n, y, pt, val };
       }))
     : [];
 
@@ -1397,23 +1289,40 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
                 style={{ pointerEvents: "none" }} />
             );
           })}
-          {/* Pass 2: tracker dots */}
-          {trackerDots.map(({ key, n, pt, val }) => {
+          {/* Pass 2: tracker dots (retângulo simples) ou trackers em H esticado (modo Combiners) */}
+          {trackerDots.map(({ key, n, y, pt, val }) => {
             const interactive = activeLayer === "trackers" || combinersMode;
-            const combId = combinersMode ? trackerCombinerId(key, n) : null;
-            const isHighlighted = combinersMode && selectedCombinerG && combId === selectedCombinerG;
-            const isHoveredComb = combinersMode && hoveredCombinerG && combId === hoveredCombinerG;
-            const fill = combinersMode
-              ? (isHighlighted ? P.warn : isHoveredComb ? P.info : "#3a4668")
-              : STATE_COLORS[activeLayer][val];
+            if (!combinersMode) {
+              return (
+                <rect key={key + "-" + n}
+                  x={pt.x - 4} y={pt.y - 9} width={8} height={18} rx={2}
+                  fill={STATE_COLORS[activeLayer][val]} opacity={0.95}
+                  style={{ pointerEvents: interactive ? "auto" : "none", cursor: interactive ? "pointer" : "default" }}
+                  onMouseEnter={interactive ? () => handleDotEnter({ key, n, pt, val }) : undefined}
+                  onMouseLeave={interactive ? handleDotLeave : undefined}
+                />
+              );
+            }
+            const combId = trackerCombinerId(key, n);
+            const isHighlighted = selectedCombinerG && combId === selectedCombinerG;
+            const isHoveredComb = hoveredCombinerG && combId === hoveredCombinerG;
+            const fill = isHighlighted ? P.warn : isHoveredComb ? P.info : "#3a4668";
+            const geomLayout = COMBINER_LAYOUT_BY_SUBKEY[key];
+            const halfHMeters = geomLayout.rowHalfHeightByY.get(y) ?? (geomLayout.rowGap * TRACKER_H_HALF_FACTOR);
+            const halfH = halfHMeters * pxPerMeterY;
+            const halfW = (geomLayout.colGap * 0.26) * pxPerMeterX;
+            const railW = Math.max(1, halfW * 0.4);
+            const hubH = Math.max(0.6, halfH * 0.09);
             return (
-              <rect key={key + "-" + n}
-                x={pt.x - 4} y={pt.y - 9} width={8} height={18} rx={2}
-                fill={fill} opacity={0.95}
-                style={{ pointerEvents: interactive ? "auto" : "none", cursor: interactive ? "pointer" : "default" }}
-                onMouseEnter={interactive ? () => handleDotEnter({ key, n, pt, val }) : undefined}
-                onMouseLeave={interactive ? handleDotLeave : undefined}
-              />
+              <g key={key + "-" + n} fill={fill}
+                style={{ pointerEvents: "auto", cursor: "pointer" }}
+                onMouseEnter={() => handleDotEnter({ key, n, pt, val })}
+                onMouseLeave={handleDotLeave}
+              >
+                <rect x={pt.x - halfW} y={pt.y - halfH} width={railW} height={halfH * 2} rx={railW * 0.4} />
+                <rect x={pt.x + halfW - railW} y={pt.y - halfH} width={railW} height={halfH * 2} rx={railW * 0.4} />
+                <rect x={pt.x - halfW} y={pt.y - hubH / 2} width={halfW * 2} height={hubH} rx={hubH * 0.4} />
+              </g>
             );
           })}
           {/* Realce imediato do tracker sob o cursor */}
@@ -1467,26 +1376,19 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
           {hoveredCombinerG && (() => {
             const c = combinerMarkers.find((cc) => cc.id === hoveredCombinerG);
             if (!c) return null;
-            const lines = [
-              `${c.id}  •  SDM ${c.subKey}`,
-              `Inversor: ${c.inversor}`,
-              `Trackers: ${c.trackerCount}  •  Strings: ${c.stringCount}`,
-            ];
-            const tw = Math.max(...lines.map((l) => l.length)) * 6.2 + 16;
-            const lh = 16;
-            const th = lines.length * lh + 8;
+            const tw = c.id.length * 6.2 + 16;
+            const lh = 18;
+            const th = lh + 8;
             const tx = c.pt.x - tw / 2, ty = c.pt.y - th - 14;
             return (
               <g style={{ pointerEvents: "none" }}>
                 <rect x={tx} y={ty} width={tw} height={th} rx={5}
                   fill="rgba(11,15,30,0.95)" stroke={P.border} strokeWidth={1} />
-                {lines.map((line, i) => (
-                  <text key={i} x={c.pt.x} y={ty + 8 + lh * i + lh / 2} fontSize={11}
-                    fill={i === 0 ? "#fff" : P.muted} fontFamily="monospace"
-                    fontWeight={i === 0 ? "700" : "500"} textAnchor="middle" dominantBaseline="middle">
-                    {line}
-                  </text>
-                ))}
+                <text x={c.pt.x} y={ty + th / 2} fontSize={11.5}
+                  fill="#fff" fontFamily="monospace" fontWeight="700"
+                  textAnchor="middle" dominantBaseline="middle">
+                  {c.id}
+                </text>
               </g>
             );
           })()}
@@ -1602,10 +1504,7 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, f
           background: "rgba(13,15,20,0.9)", border: `1px solid ${P.border}`,
           borderRadius: 8, padding: "8px 10px", pointerEvents: "none", maxWidth: 220,
         }}>
-          <div style={{ color: P.info, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>MAPA DE COMBINERS</div>
-          <div style={{ color: P.muted, fontSize: 10.5, lineHeight: 1.5, marginBottom: 6 }}>
-            Dê zoom num subcampo para ver as combiners. Clique numa para destacar os trackers ligados a ela. Duplo clique num subcampo abre o mapa individual.
-          </div>
+          <div style={{ color: P.info, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>COMBINERS</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: P.card2, border: "1px solid #fff", marginRight: 5, verticalAlign: "middle" }} />Combiner</span>
             <span style={{ fontSize: 10, color: P.muted, fontFamily: "monospace" }}><span style={{ display: "inline-block", width: 8, height: 8, borderRadius: 2, background: P.warn, marginRight: 5, verticalAlign: "middle" }} />Selecionada</span>
@@ -1792,6 +1691,9 @@ export default function App() {
   const [focoType, setFocoType] = useState("formigas");
   const [focoVisit, setFocoVisit] = useState("v1");
   const setActiveLayer = (layer) => {
+    // Escolher qualquer camada normal sai do modo Combiners — senão o botão
+    // fica "ativo" e o mapa não muda, dando a impressão de bug.
+    setCombinersMode(false);
     if (layer === "trator" || layer === "trackers" || isFocosLayer(layer)) setHeatmap(false);
     else if (readOnly) setHeatmap(true);
     setActiveLayerRaw(layer);
@@ -2047,7 +1949,7 @@ export default function App() {
                   background: combinersMode ? P.info + "22" : "transparent",
                   color: combinersMode ? P.info : P.muted, transition: "all .12s",
                 }}>
-                  Mapa de Combiners
+                  Combiners
                 </button>
               </div>
             </div>
@@ -2062,8 +1964,7 @@ export default function App() {
               activeLayer={activeLayer} setActiveLayer={setActiveLayer}
               onNavigate={(key) => setView(key || "overview")} readOnly={readOnly}
               focoType={focoType} setFocoType={setFocoType}
-              focoVisit={focoVisit} setFocoVisit={setFocoVisit}
-              combinersMode={combinersMode} setCombinersMode={setCombinersMode} />
+              focoVisit={focoVisit} setFocoVisit={setFocoVisit} />
           </div>
         )}
       </div>
