@@ -2846,6 +2846,14 @@ function YearCompareChart({ yearKeys, years }) {
 function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   const entries = useMemo(() => getHistoryEntries(statuses), [statuses]);
   const sortedEntries = useMemo(() => [...entries].sort((a, b) => b.data.localeCompare(a.data)), [entries]);
+  // "Últimos registros" (aba Registrar) é sobre o que você acabou de
+  // fazer, não sobre a data do evento — um trator com data antiga (de
+  // antes do acabamento já importado) nunca apareceria no topo se
+  // ordenasse por data. Ordena por quando foi de fato criado.
+  const recentlyCreated = useMemo(
+    () => [...entries].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")),
+    [entries]
+  );
   const [compareFase, setCompareFase] = useState("rocagem_acabamento");
   const [rankingYear, setRankingYear] = useState(String(new Date().getFullYear()));
 
@@ -2896,9 +2904,9 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>
             ÚLTIMOS REGISTROS
           </div>
-          {sortedEntries.length === 0 ? (
+          {recentlyCreated.length === 0 ? (
             <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro ainda.</div>
-          ) : sortedEntries.slice(0, 5).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
+          ) : recentlyCreated.slice(0, 5).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
         </div>
       </div>
     );
