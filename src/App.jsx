@@ -3536,6 +3536,8 @@ export default function App() {
   const saveTimer = useRef(null);
   const skipNextRealtime = useRef(false);
   const userDirty = useRef(false);
+  const cycleCheckedRef = useRef(false);
+  const [cycleNotice, setCycleNotice] = useState(null);
 
   const handleLogout = useCallback(() => {
     setOverlayPhase("login");
@@ -3639,6 +3641,23 @@ export default function App() {
     }, 800);
   }, [statuses, loaded]);
 
+  // Ao virar o ciclo de Roçagem (maio), reconcilia sozinho o mapa com o
+  // Histórico — sem precisar de ninguém clicar em "Recalcular" todo ano.
+  // Roda 1x por sessão admin, só quando o ciclo vigente muda em relação ao
+  // último ciclo já reconciliado (_rocagemCycleMark); avisa o que mudou.
+  useEffect(() => {
+    if (!loaded || readOnly || cycleCheckedRef.current) return;
+    cycleCheckedRef.current = true;
+    const today = new Date();
+    const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+    const currentCycle = rocagemCycleYear(todayIso);
+    if (statuses._rocagemCycleMark === currentCycle) return;
+    const { next, bySub } = diffReconcile(statuses);
+    const changedCount = Object.values(bySub).reduce((s, d) => s + d.tratorLiberado + d.rocagemConcluida + d.rocagemPendente, 0);
+    setStatusesByUser(() => ({ ...next, _rocagemCycleMark: currentCycle }));
+    if (changedCount > 0) setCycleNotice({ cycle: currentCycle, bySub });
+  }, [loaded, readOnly, statuses, setStatusesByUser]);
+
   const globalStat = useMemo(() => {
     if (isFocosLayer(activeLayer)) return { done: 0, prog: 0, total: 0 };
     const realLayer = activeLayer;
@@ -3677,6 +3696,35 @@ export default function App() {
       `}</style>
 
       {overlayPhase !== "done" && <LoginOverlay phase={overlayPhase} onLogin={handleLogin} />}
+
+      {cycleNotice && (
+        <div style={{
+          position: "fixed", top: 16, right: 16, zIndex: 5000, maxWidth: 380,
+          background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12,
+          padding: "14px 16px", boxShadow: "0 8px 24px rgba(20,30,60,0.18)",
+          animation: "fadeSlideIn .25s ease",
+        }}>
+          <div style={{ display: "flex", alignItems: "start", justifyContent: "space-between", gap: 10 }}>
+            <div style={{ color: P.chromeText, fontSize: 12.5, fontWeight: 700 }}>Ciclo de Roçagem {cycleNotice.cycle}/{cycleNotice.cycle + 1} começou</div>
+            <button onClick={() => setCycleNotice(null)} style={{
+              background: "transparent", border: "none", cursor: "pointer", color: P.chromeMuted, fontSize: 14, lineHeight: 1, padding: 0,
+            }}>✕</button>
+          </div>
+          <div style={{ color: P.chromeMuted, fontSize: 11.5, marginTop: 6, lineHeight: 1.5 }}>
+            O mapa foi ajustado automaticamente pro ciclo novo, com base no Histórico:
+          </div>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 3, maxHeight: 160, overflowY: "auto" }}>
+            {Object.entries(cycleNotice.bySub).map(([subKey, d]) => (
+              <div key={subKey} style={{ fontSize: 11, color: P.chromeText }}>
+                <b>SDM {subKey}</b>
+                {d.tratorLiberado > 0 && <span> · +{d.tratorLiberado} trator liberado</span>}
+                {d.rocagemConcluida > 0 && <span> · +{d.rocagemConcluida} concluída</span>}
+                {d.rocagemPendente > 0 && <span> · {d.rocagemPendente} voltou pra pendente (ciclo anterior)</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <Sidebar
         collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar}
