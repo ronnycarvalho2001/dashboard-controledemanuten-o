@@ -65,6 +65,13 @@ const P = {
   text: "#e8edf8", muted: "#7b8bad", danger: "#ff5f7e", warn: "#ff9b3d",
   info: "#4da6ff", purple: "#c084fc",
   navy: "#1e2852",
+  // Tema claro da moldura do dashboard (sidebar/topbar/cards) — mapas e
+  // estados de tracker continuam no tema escuro acima, que já é sintonizado
+  // pro contraste dos indicadores de status.
+  page: "#eef1f8",
+  chromeCard: "#ffffff", chromeBorder: "#dbe2f0", chromeBorderSoft: "#e8ecf6",
+  chromeText: "#182449", chromeMuted: "#5c6788",
+  blue: "#1656d6", blueD: "#0f3fa8", blueG: "rgba(22,86,214,0.12)",
 };
 
 const STATE_COLORS = {
@@ -172,7 +179,101 @@ function getFocoTotalAll(statuses, subKey, cycle, visit) {
   return total;
 }
 function isFocosLayer(layer) { return layer === "pragas_focos_c1" || layer === "pragas_focos_c2"; }
+function layerDisplayLabel(activeLayer) {
+  if (activeLayer === "trator") return "Acesso trator";
+  if (activeLayer === "trackers") return "Trackers";
+  if (activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer)) return "Controle de Pragas";
+  return LAYERS.find((l) => l.key === activeLayer)?.label || activeLayer;
+}
 function focoCycleKey(layer) { return layer === "pragas_focos_c2" ? "c2" : "c1"; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   HISTÓRICO — registros manuais de datas de roçagem (trator + acabamento)
+   e lavagem por trecho de trackers, usados pra linha do tempo, ranking de
+   velocidade e comparação entre ciclos/anos. Guardado em statuses._history,
+   seguindo o mesmo padrão de statuses._activity / _focos_* — um array
+   dentro do mesmo blob JSON já sincronizado com o Supabase, sem precisar
+   de tabela nova.
+   ════════════════════════════════════════════════════════════════════════ */
+const HIST_PHASES = [
+  { key: "rocagem_trator", label: "Roçagem — Trator", color: P.warn },
+  { key: "rocagem_acabamento", label: "Roçagem — Acabamento (conclusão)", color: P.done },
+  { key: "lavagem", label: "Lavagem", color: P.info },
+  { key: "sem_atividade", label: "Sem atividade (parada)", color: P.muted },
+];
+// Fases de trabalho de verdade — usadas onde faz sentido somar quantidade
+// de trackers (ranking, comparar ciclos). "Sem atividade" fica de fora
+// dessas contas, é só um registro informativo de período parado.
+const HIST_WORK_PHASES = HIST_PHASES.filter((p) => p.key !== "sem_atividade");
+// Paleta validada (WCAG/CVD) pra identidade de série em "comparar ciclos" —
+// cada ano em cor própria, independente das cores semânticas de fase acima.
+const HIST_YEAR_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a"];
+const HISTORICO_TAB_LABELS = {
+  linha_do_tempo: "Linha do tempo", indicadores: "Indicadores",
+  comparar_ciclos: "Comparar ciclos", registrar: "Registrar",
+};
+function histPhase(key) { return HIST_PHASES.find((p) => p.key === key) || HIST_PHASES[0]; }
+function histEntryQty(e) {
+  if (e.trackerDe == null) return 0;
+  return Math.max(0, (e.trackerAte ?? e.trackerDe) - e.trackerDe + 1);
+}
+function getHistoryEntries(statuses) { return statuses._history || []; }
+function computeSpeedRanking(entries, faseKey) {
+  const bySub = {};
+  entries.filter((e) => e.fase === faseKey).forEach((e) => {
+    (bySub[e.subKey] || (bySub[e.subKey] = [])).push(e);
+  });
+  return Object.entries(bySub).map(([subKey, list]) => {
+    const qty = list.reduce((s, e) => s + histEntryQty(e), 0);
+    const dates = list.map((e) => e.data).sort();
+    const days = Math.max(1, Math.round((new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000) + 1);
+    return { subKey, qty, days, rate: qty / days };
+  }).sort((a, b) => b.rate - a.rate);
+}
+function computeYearCompare(entries) {
+  const years = {};
+  entries.forEach((e) => {
+    const y = e.data.slice(0, 4);
+    const bucket = years[y] || (years[y] = {});
+    bucket[e.fase] = (bucket[e.fase] || 0) + histEntryQty(e);
+  });
+  const yearKeys = Object.keys(years).sort().slice(-3);
+  return { yearKeys, years };
+}
+// Progresso "de verdade" da usina inteira, direto do grid de status atual
+// (não do log) — o log pode ter sobreposição entre registros, o grid não.
+function computeLiveProgress(statuses, layerKey) {
+  let done = 0, total = 0;
+  SUB_KEYS.forEach((k) => {
+    const r = countDone(statuses, k, PLANT[k].t, layerKey);
+    done += r.done; total += r.total;
+  });
+  return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
+}
+function computeTratorVsAcabamento(entries) {
+  const bySub = {};
+  entries.forEach((e) => {
+    if (e.fase !== "rocagem_trator" && e.fase !== "rocagem_acabamento") return;
+    const b = bySub[e.subKey] || (bySub[e.subKey] = { trator: 0, acabamento: 0 });
+    b[e.fase === "rocagem_trator" ? "trator" : "acabamento"] += histEntryQty(e);
+  });
+  return Object.entries(bySub)
+    .map(([subKey, v]) => ({ subKey, ...v, gap: v.trator - v.acabamento }))
+    .sort((a, b) => b.gap - a.gap);
+}
+function computeDowntimeByMotivo(entries) {
+  const byMotivo = {};
+  let totalDays = 0;
+  entries.filter((e) => e.fase === "sem_atividade").forEach((e) => {
+    const start = new Date(e.data), end = new Date(e.dataFim || e.data);
+    const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+    totalDays += days;
+    const label = e.motivo?.trim() || "Sem motivo informado";
+    const key = label.toLowerCase();
+    (byMotivo[key] || (byMotivo[key] = { label, days: 0 })).days += days;
+  });
+  return { totalDays, list: Object.values(byMotivo).sort((a, b) => b.days - a.days) };
+}
 function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
   return LAYERS.map((l, i) => Math.min(arr[i] ?? 0, l.states.length - 1));
@@ -227,33 +328,6 @@ function ProgressBar({ done, prog, total, color }) {
   );
 }
 
-function LayerTabs({ active, onChange }) {
-  const main = LAYERS.filter((l) => !l.small && !l.hidden);
-  return (
-    <div style={{
-      display: "inline-flex", alignItems: "center", gap: 2,
-      background: P.bg, border: `1px solid ${P.border}`, borderRadius: 10, padding: 3,
-    }}>
-      {main.map((l) => {
-        const isPragasGroup = l.group === "pragas";
-        const on = isPragasGroup ? (active === "pragas_c1" || active === "pragas_c2" || isFocosLayer(active)) : active === l.key;
-        return (
-          <button key={l.key} onClick={() => onChange(isPragasGroup ? "pragas_c1" : l.key)} style={{
-            display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
-            borderRadius: 8, border: "none", cursor: "pointer",
-            fontFamily: "inherit", fontSize: 12.5, fontWeight: 600,
-            background: on ? P.accent : "transparent",
-            color: on ? "#111827" : P.muted,
-            transition: "background .12s, color .12s",
-          }}>
-            {l.tabLabel || l.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 function PragasSubTabs({ active, onChange, readOnly }) {
   const tabs = readOnly ? [
     { key: "pragas_c1", label: "Ciclo 1" },
@@ -266,8 +340,8 @@ function PragasSubTabs({ active, onChange, readOnly }) {
   ];
   return (
     <div style={{
-      display: "inline-flex", alignItems: "center", gap: 2,
-      background: P.bg, border: `1px solid ${P.border}`, borderRadius: 8, padding: 2,
+      display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2,
+      background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 2,
     }}>
       {tabs.map((t) => {
         const on = active === t.key;
@@ -275,8 +349,8 @@ function PragasSubTabs({ active, onChange, readOnly }) {
           <button key={t.key} onClick={() => onChange(t.key)} style={{
             padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: on ? (t.accent ? P.warn + "22" : P.done + "22") : "transparent",
-            color: on ? (t.accent ? P.warn : P.done) : P.muted,
+            background: on ? (t.accent ? P.warn + "33" : P.done + "33") : "transparent",
+            color: on ? (t.accent ? P.warn : P.done) : "rgba(232,237,248,0.65)",
             transition: "all .12s",
           }}>
             {t.label}
@@ -289,15 +363,15 @@ function PragasSubTabs({ active, onChange, readOnly }) {
 
 function FocoVisitChips({ active, onChange }) {
   return (
-    <div style={{ display: "inline-flex", gap: 2, background: P.bg, border: `1px solid ${P.border}`, borderRadius: 8, padding: 2 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 2 }}>
       {FOCO_VISITS.map((v) => {
         const on = active === v.key;
         return (
           <button key={v.key} onClick={() => onChange(v.key)} style={{
             padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: on ? P.info + "22" : "transparent",
-            color: on ? P.info : P.muted,
+            background: on ? P.info + "33" : "transparent",
+            color: on ? P.info : "rgba(232,237,248,0.65)",
             transition: "all .12s",
           }}>
             {v.label}
@@ -310,15 +384,15 @@ function FocoVisitChips({ active, onChange }) {
 
 function FocoTypeChips({ active, onChange }) {
   return (
-    <div style={{ display: "inline-flex", gap: 2, background: P.bg, border: `1px solid ${P.border}`, borderRadius: 8, padding: 2 }}>
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 2, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, padding: 2 }}>
       {FOCO_TYPES.map((f) => {
         const on = active === f.key;
         return (
           <button key={f.key} onClick={() => onChange(f.key)} style={{
             padding: "4px 10px", borderRadius: 6, border: "none", cursor: "pointer",
             fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: on ? P.warn + "22" : "transparent",
-            color: on ? P.warn : P.muted,
+            background: on ? P.warn + "33" : "transparent",
+            color: on ? P.warn : "rgba(232,237,248,0.65)",
             transition: "all .12s",
           }}>
             {f.label}
@@ -363,19 +437,19 @@ function Legend({ activeLayer }) {
       {layer.states.map((s, i) => (
         <div key={s} style={{ display: "flex", alignItems: "center", gap: 5 }}>
           <div style={{ width: 8, height: 8, borderRadius: "50%", background: colors[i], flexShrink: 0 }} />
-          <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>{s}</span>
+          <span style={{ fontSize: 11, color: P.chromeMuted, fontFamily: "monospace" }}>{s}</span>
         </div>
       ))}
       {activeLayer === "trackers" && (
         <>
-          <div style={{ width: 1, height: 12, background: P.border }} />
+          <div style={{ width: 1, height: 12, background: P.chromeBorder }} />
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ width: 12, height: 8, borderRadius: 2, border: `2px solid ${P.warn}`, flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>Roçagem em andamento</span>
+            <span style={{ fontSize: 11, color: P.chromeMuted, fontFamily: "monospace" }}>Roçagem em andamento</span>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ width: 12, height: 8, borderRadius: 2, border: `2px solid ${P.info}`, flexShrink: 0 }} />
-            <span style={{ fontSize: 11, color: P.muted, fontFamily: "monospace" }}>Lavagem em andamento</span>
+            <span style={{ fontSize: 11, color: P.chromeMuted, fontFamily: "monospace" }}>Lavagem em andamento</span>
           </div>
         </>
       )}
@@ -764,10 +838,10 @@ function RangeTool({ activeLayer, onApply }) {
   const [val, setVal] = useState(2);
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <span style={{ fontSize: 11.5, color: P.muted }}>Tracker</span>
+      <span style={{ fontSize: 11.5, color: P.chromeMuted }}>Tracker</span>
       <input type="number" min={1} max={132} value={from} onChange={(e) => setFrom(+e.target.value)}
         style={{ width: 56, background: P.bg, border: `1px solid ${P.border}`, borderRadius: 6, color: P.text, padding: "5px 6px", fontFamily: "monospace", fontSize: 12 }} />
-      <span style={{ color: P.muted, fontSize: 11.5 }}>até</span>
+      <span style={{ color: P.chromeMuted, fontSize: 11.5 }}>até</span>
       <input type="number" min={1} max={132} value={to} onChange={(e) => setTo(+e.target.value)}
         style={{ width: 56, background: P.bg, border: `1px solid ${P.border}`, borderRadius: 6, color: P.text, padding: "5px 6px", fontFamily: "monospace", fontSize: 12 }} />
       <select value={val} onChange={(e) => setVal(+e.target.value)} style={{
@@ -776,7 +850,7 @@ function RangeTool({ activeLayer, onApply }) {
         {layer.states.map((s, i) => <option key={i} value={i}>{s}</option>)}
       </select>
       <button onClick={() => onApply(from, to, val)} style={{
-        background: P.accentG, border: `1px solid ${P.accent}66`, color: P.accent, borderRadius: 6,
+        background: P.blueG, border: `1px solid ${P.blue}66`, color: P.blue, borderRadius: 6,
         padding: "6px 14px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
       }}>Aplicar</button>
     </div>
@@ -864,56 +938,6 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, height: "100%" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", flexShrink: 0 }}>
-        <button onClick={() => onNavigate(null)} style={{
-          display: "flex", alignItems: "center", gap: 5,
-          background: "transparent", border: `1px solid ${P.border}`, color: P.muted, borderRadius: 8,
-          padding: "7px 13px", cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
-          transition: "border-color .12s, color .12s",
-        }}>← Visão geral</button>
-        <h2 style={{ fontSize: 18, fontWeight: 700, color: P.text, margin: 0 }}>SDM {subKey}</h2>
-        <select value={subKey} onChange={(e) => onNavigate(e.target.value)} style={{
-          marginLeft: "auto", background: P.bg, border: `1px solid ${P.border}`, color: P.text,
-          borderRadius: 8, padding: "7px 12px", fontSize: 12, fontFamily: "inherit", fontWeight: 600,
-          cursor: "pointer", outline: "none",
-        }}>
-          {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
-        </select>
-      </div>
-
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
-        <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-        {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer)) && (
-          <>
-            <PragasSubTabs active={activeLayer} onChange={setActiveLayer} />
-            {isFocosLayer(activeLayer) && <>
-                    <FocoVisitChips active={focoVisit} onChange={setFocoVisit} />
-                    <FocoTypeChips active={focoType} onChange={setFocoType} />
-                  </>}
-          </>
-        )}
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
-            padding: "4px 10px", borderRadius: 7,
-            border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
-            cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: activeLayer === "trator" ? P.warn + "22" : "transparent",
-            color: activeLayer === "trator" ? P.warn : P.muted, transition: "all .12s",
-          }}>
-            Acesso trator
-          </button>
-          <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
-            padding: "4px 10px", borderRadius: 7,
-            border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
-            cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-            background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
-            color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
-          }}>
-            Trackers
-          </button>
-        </div>
-      </div>
-
       {isFocos ? (() => {
         const cyc = focoCycleKey(activeLayer);
         const bucketKey = focoKey(cyc, focoVisit);
@@ -957,9 +981,9 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
               const bucket = statuses[bucketKey] || {};
               const val = (bucket[subKey] && bucket[subKey][ft.key]) || 0;
               return (
-                <div key={ft.key} style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 16 }}>
+                <div key={ft.key} style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <span style={{ color: P.text, fontSize: 13, fontWeight: 700, fontFamily: "monospace", flex: 1 }}>{ft.label}</span>
+                    <span style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, fontFamily: "monospace", flex: 1 }}>{ft.label}</span>
                     <input type="number" min={0} value={val} disabled={readOnly}
                       onChange={(e) => {
                         const v = Math.max(0, parseInt(e.target.value) || 0);
@@ -1008,16 +1032,16 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
         </div>
 
         <div style={{ flex: "1 1 260px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto" }}>
-          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>CLASSIFICAÇÃO — {layer.label.toUpperCase()}</div>
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 14 }}>
+            <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>CLASSIFICAÇÃO — {layer.label.toUpperCase()}</div>
             {layer.states.map((s, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                 <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATE_COLORS[activeLayer][i], flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 11.5, color: P.muted, fontFamily: "monospace" }}>{s}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: stateCounts[i] > 0 ? P.text : P.border, fontFamily: "monospace", minWidth: 28, textAlign: "right" }}>
+                <span style={{ flex: 1, fontSize: 11.5, color: P.chromeMuted, fontFamily: "monospace" }}>{s}</span>
+                <span style={{ fontSize: 13, fontWeight: 700, color: stateCounts[i] > 0 ? P.chromeText : P.chromeBorder, fontFamily: "monospace", minWidth: 28, textAlign: "right" }}>
                   {stateCounts[i]}
                 </span>
-                <span style={{ fontSize: 10.5, color: P.muted, fontFamily: "monospace", width: 34, textAlign: "right" }}>
+                <span style={{ fontSize: 10.5, color: P.chromeMuted, fontFamily: "monospace", width: 34, textAlign: "right" }}>
                   {geo.trackers.length > 0 ? Math.round(stateCounts[i] / geo.trackers.length * 100) + "%" : "—"}
                 </span>
               </div>
@@ -1025,17 +1049,17 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           </div>
 
           {!readOnly && activeLayer !== "trackers" && (
-            <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
+            <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", marginBottom: 8, letterSpacing: 0.5 }}>TRACKER SELECIONADO</div>
               {selected != null ? (
                 <div>
-                  <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 8, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
+                  <div style={{ color: P.chromeText, fontWeight: 700, fontSize: 14, marginBottom: 8, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
                   {LAYERS.filter((l) => !l.hidden).map((l, i) => {
                     const li = LAYERS.indexOf(l);
                     const stateColor = STATE_COLORS[l.key][selStatus[li]];
                     return (
                       <div key={l.key} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-                        <span style={{ fontSize: 11, color: P.muted, width: 96, fontFamily: "inherit" }}>{l.label}</span>
+                        <span style={{ fontSize: 11, color: P.chromeMuted, width: 96, fontFamily: "inherit" }}>{l.label}</span>
                         <button onClick={() => applyToTrackers([selected], (selStatus[li] + 1) % l.states.length)} style={{
                           display: "flex", alignItems: "center", gap: 5,
                           background: stateColor + "1e", border: `1px solid ${stateColor}55`,
@@ -1050,20 +1074,20 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                     );
                   })}
                 </div>
-              ) : <div style={{ color: P.muted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver e editar o status. Shift+clique pinta um intervalo.</div>}
+              ) : <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Toque em um tracker no mapa para ver e editar o status. Shift+clique pinta um intervalo.</div>}
             </div>
           )}
 
           {activeLayer === "trackers" && (
-            <div style={{ background: P.card, border: `1px solid ${P.purple}55`, borderRadius: 12, padding: 14 }}>
+            <div style={{ background: P.chromeCard, border: `1px solid ${P.purple}55`, borderRadius: 12, padding: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 }}>
-                <span style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>INFORMAÇÕES DO TRACKER</span>
+                <span style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>INFORMAÇÕES DO TRACKER</span>
                 {!readOnly && (
                   <button onClick={() => setEditTrackers((v) => !v)} title={editTrackers ? "Clique no tracker no mapa altera o status" : "Ative para poder alterar o status ao clicar"} style={{
                     display: "flex", alignItems: "center", gap: 5,
-                    background: editTrackers ? P.accent : "transparent",
-                    border: `1px solid ${editTrackers ? P.accent : P.border}`,
-                    color: editTrackers ? "#111827" : P.muted,
+                    background: editTrackers ? P.blue : "transparent",
+                    border: `1px solid ${editTrackers ? P.blue : P.chromeBorder}`,
+                    color: editTrackers ? "#ffffff" : P.chromeMuted,
                     borderRadius: 99, padding: "3px 10px", fontSize: 10.5, fontWeight: 700,
                     cursor: "pointer", fontFamily: "inherit", flexShrink: 0, transition: "all .12s",
                   }}>
@@ -1080,10 +1104,10 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                 const canEdit = !readOnly && editTrackers;
                 return (
                   <div>
-                    <div style={{ color: P.text, fontWeight: 700, fontSize: 14, marginBottom: 10, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
+                    <div style={{ color: P.chromeText, fontWeight: 700, fontSize: 14, marginBottom: 10, fontFamily: "monospace" }}>{trackerId(subKey, selected)}</div>
 
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                      <span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>Status</span>
+                      <span style={{ fontSize: 11, color: P.chromeMuted, width: 82, flexShrink: 0 }}>Status</span>
                       {canEdit ? (
                         <button onClick={() => applyToTrackers([selected], (val + 1) % trackersLayer.states.length)} style={{
                           display: "flex", alignItems: "center", gap: 5,
@@ -1118,26 +1142,26 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
                           ["Potência da string", `${elec.potString.toLocaleString("pt-BR")} Wp`],
                         ].map(([label, value]) => (
                           <div key={label} style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                            <span style={{ fontSize: 11, color: P.muted, width: 82, flexShrink: 0 }}>{label}</span>
-                            <span style={{ fontSize: 12, color: P.text, fontFamily: "monospace" }}>{value}</span>
+                            <span style={{ fontSize: 11, color: P.chromeMuted, width: 82, flexShrink: 0 }}>{label}</span>
+                            <span style={{ fontSize: 12, color: P.chromeText, fontFamily: "monospace" }}>{value}</span>
                           </div>
                         ))}
                         <div style={{ marginTop: 4 }}>
-                          <div style={{ fontSize: 10.5, color: P.muted, marginBottom: 4 }}>STRINGS ({elec.strings.length})</div>
+                          <div style={{ fontSize: 10.5, color: P.chromeMuted, marginBottom: 4 }}>STRINGS ({elec.strings.length})</div>
                           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                             {elec.strings.map((s) => (
-                              <span key={s} style={{ fontSize: 10.5, color: P.text, fontFamily: "monospace" }}>{s}</span>
+                              <span key={s} style={{ fontSize: 10.5, color: P.chromeText, fontFamily: "monospace" }}>{s}</span>
                             ))}
                           </div>
                         </div>
                       </div>
                     ) : (
-                      <div style={{ color: P.muted, fontSize: 11.5 }}>Dados elétricos (combiner/string) ainda não cadastrados para este subcampo.</div>
+                      <div style={{ color: P.chromeMuted, fontSize: 11.5 }}>Dados elétricos (combiner/string) ainda não cadastrados para este subcampo.</div>
                     )}
                   </div>
                 );
               })() : (
-                <div style={{ color: P.muted, fontSize: 12.5 }}>
+                <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>
                   Toque em um tracker no mapa para ver suas informações. {!readOnly && "Ative \"Editar\" para poder alterar o status ao clicar."}
                 </div>
               )}
@@ -1145,8 +1169,8 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
           )}
 
           {!readOnly && (
-            <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-              <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>MARCAR INTERVALO (1–132)</div>
+            <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 14 }}>
+              <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>MARCAR INTERVALO (1–132)</div>
               <RangeTool activeLayer={activeLayer} onApply={(from, to, val) => {
                 const lo = Math.max(1, Math.min(from, to)), hi = Math.min(132, Math.max(from, to));
                 const ns = []; for (let i = lo; i <= hi; i++) ns.push(i);
@@ -1155,8 +1179,8 @@ function SubcampoView({ subKey, statuses, setStatuses, activeLayer, setActiveLay
             </div>
           )}
 
-          <div style={{ background: P.card, border: `1px solid ${P.border}`, borderRadius: 12, padding: 14 }}>
-            <div style={{ color: P.muted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>GRUPOS DE COMANDO</div>
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 14 }}>
+            <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", marginBottom: 10, letterSpacing: 0.5 }}>GRUPOS DE COMANDO</div>
             <GroupPanel geo={geo} subKey={subKey} statuses={statuses} activeLayer={activeLayer}
               onBulk={readOnly ? () => {} : (ns, val) => applyToTrackers(ns, val)} readOnly={readOnly} />
           </div>
@@ -1308,7 +1332,7 @@ const TRACKER_INFO_MIN_ZOOM = 15;
 
 function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVisit, onToggleActivity, combinersMode }) {
   const map = useMap();
-  const [, tick] = useReducer((n) => n + 1, 0);
+  const [viewTick, tick] = useReducer((n) => n + 1, 0);
   useMapEvents({ move: tick, zoom: tick, resize: tick });
   const [hoverTracker, setHoverTracker] = useState(null);
   const [richTooltip, setRichTooltip] = useState(null);
@@ -1350,7 +1374,15 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     pxPerMeterY = Math.hypot(pRefN.x - pRef.x, pRefN.y - pRef.y) / 200;
   }
 
-  const boxData = SUB_KEYS.map((key) => {
+  // As três listas abaixo (boxData/trackerDots/combinerMarkers) envolvem
+  // até ~2000 projeções de coordenada (Leaflet latLngToContainerPoint) —
+  // caro pra recalcular em toda passada de mouse sobre o mapa. Sem
+  // useMemo, cada hover/hover-out num tracker (setHoverTracker etc.)
+  // disparava um re-render que refazia TODAS essas projeções do zero,
+  // travando o cursor especialmente no modo Combiners. Memoizando por
+  // viewTick (só muda em pan/zoom/resize reais) elas só recalculam quando
+  // o mapa de fato se move, não a cada hover.
+  const boxData = useMemo(() => SUB_KEYS.map((key) => {
     const trackers = PLANT[key].t;
     const stat = isFocos ? { done: 0, prog: 0, total: 0, pending: 0 } : countDone(statuses, key, trackers, realLayer);
     const pct = stat.total ? stat.done / stat.total : 0;
@@ -1374,7 +1406,8 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
     const activity = getActivity(statuses, key);
 
     return { key, stat, pct, blockHullStrs, bx, by, bw, bh, cx, cy, avgHeat, focoQty, activity };
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [viewTick, statuses, isFocos, realLayer, idx, heatmap, activeLayer, focoType, focoVisit]);
 
   const focoMax = isFocos ? Math.max(1, ...boxData.map((d) => d.focoQty)) : 1;
 
@@ -1384,17 +1417,21 @@ function PlantLayer({ statuses, activeLayer, onSelect, heatmap, focoType, focoVi
   const fName = fPct * 0.80;
   const sw = Math.max(0.5, fPct * 0.05);
 
-  const trackerDots = (!isFocos && !heatmap && zoom > 15)
+  const trackerDots = useMemo(() => (!isFocos && !heatmap && zoom > 15)
     ? SUB_KEYS.flatMap((key) => TRACKER_LL[key].map(({ n, y, ll }) => {
         const pt = toPixel(ll);
         const val = getStatus(statuses, key, n)[idx];
         return { key, n, y, pt, val };
       }))
-    : [];
+    : []
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  , [viewTick, statuses, isFocos, heatmap, idx]);
 
-  const combinerMarkers = (combinersMode && zoom > 15)
+  const combinerMarkers = useMemo(() => (combinersMode && zoom > 15)
     ? ALL_COMBINERS.map((c) => ({ ...c, pt: toPixel(c.ll) }))
-    : [];
+    : []
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  , [viewTick, combinersMode]);
 
   return createPortal(
     <svg
@@ -1629,6 +1666,21 @@ function ZoomWatcher({ onZoom }) {
   return null;
 }
 
+// Leaflet mede o container só na criação — sem isso, recolher/expandir a
+// sidebar (que redimensiona o container via transição de CSS, não resize
+// da janela) deixa o mapa "cortado" no tamanho antigo até o usuário mexer
+// o zoom manualmente.
+function MapResizeWatcher() {
+  const map = useMap();
+  useEffect(() => {
+    const container = map.getContainer();
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [map]);
+  return null;
+}
+
 function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, focoType, focoVisit, onToggleActivity, combinersMode }) {
   return (
     <div style={{
@@ -1646,6 +1698,7 @@ function OverviewMap({ statuses, activeLayer, onSelect, heatmap, onZoomChange, f
           maxZoom={20} maxNativeZoom={17}
         />
         <ZoomWatcher onZoom={onZoomChange} />
+        <MapResizeWatcher />
         <PlantLayer
           statuses={statuses} activeLayer={activeLayer}
           onSelect={onSelect} heatmap={heatmap} focoType={focoType} focoVisit={focoVisit}
@@ -1859,6 +1912,679 @@ function LoginOverlay({ phase, onLogin }) {
   );
 }
 
+/* ════════════════════════════════════════════════════════════════════════
+   SIDEBAR — navegação e controles do dashboard, recolhível
+   ════════════════════════════════════════════════════════════════════════ */
+const SIDEBAR_W = 252;
+const SIDEBAR_W_COLLAPSED = 76;
+
+function SideSectionLabel({ collapsed, children }) {
+  if (collapsed) return <div style={{ height: 1, background: "rgba(255,255,255,0.1)", margin: "4px 10px" }} />;
+  return (
+    <div style={{
+      color: "rgba(232,237,248,0.42)", fontSize: 10, fontWeight: 700, letterSpacing: 1,
+      fontFamily: "monospace", padding: "0 12px", marginBottom: 4,
+    }}>{children}</div>
+  );
+}
+
+function SideNavButton({ active, collapsed, label, onClick, indent }) {
+  return (
+    <button onClick={onClick} title={collapsed ? label : undefined} style={{
+      display: "flex", alignItems: "center", width: "100%",
+      justifyContent: collapsed ? "center" : "flex-start",
+      padding: collapsed ? "9px 0" : `8px 12px 8px ${12 + (indent || 0)}px`,
+      borderRadius: 8, border: "none", cursor: "pointer",
+      fontFamily: "inherit", fontSize: 12.5, fontWeight: 600, textAlign: "left",
+      background: active ? P.blue : "transparent",
+      color: active ? "#ffffff" : "rgba(232,237,248,0.72)",
+      transition: "background .12s, color .12s",
+      whiteSpace: "nowrap", overflow: "hidden", flexShrink: 0,
+    }}>
+      {collapsed
+        ? <span style={{ width: 6, height: 6, borderRadius: "50%", background: active ? "#fff" : "rgba(255,255,255,0.35)", flexShrink: 0 }} />
+        : label}
+    </button>
+  );
+}
+
+function SideToolButton({ active, collapsed, label, onClick, color }) {
+  return (
+    <button onClick={onClick} title={label} style={{
+      display: "flex", alignItems: "center", gap: 8, width: "100%",
+      justifyContent: collapsed ? "center" : "flex-start",
+      padding: collapsed ? "8px 0" : "7px 10px", marginBottom: 4,
+      borderRadius: 7, cursor: "pointer", fontFamily: "inherit", fontSize: 11.5, fontWeight: 600,
+      border: `1px solid ${active ? color + "77" : "rgba(255,255,255,0.14)"}`,
+      background: active ? color + "26" : "transparent",
+      color: active ? color : "rgba(232,237,248,0.68)",
+      transition: "all .12s", whiteSpace: "nowrap", overflow: "hidden",
+    }}>
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: active ? color : "rgba(255,255,255,0.25)", flexShrink: 0 }} />
+      {!collapsed && label}
+    </button>
+  );
+}
+
+function Sidebar({
+  collapsed, onToggleCollapse,
+  view, onNavigate,
+  activeLayer, onChangeLayer,
+  readOnly,
+  heatmap, onToggleHeatmap,
+  combinersMode, onToggleCombiners,
+  focoType, onChangeFocoType,
+  focoVisit, onChangeFocoVisit,
+  historicoTab, onSelectHistoricoTab,
+  syncState, lastUpdated,
+  onLogout,
+}) {
+  const showFocosSubTabs = activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer);
+  const inSubcampo = view !== "overview";
+  // Em "Visão geral" os ciclos de Focos e o toggle de Heatmap manual ficam
+  // reservados ao admin — a viewer sempre vê o heatmap agregado, nunca a
+  // grade de trackers, pra não misturar detalhe operacional com o painel
+  // de leitura. Dentro de um subcampo o detalhe de Focos já é seguro pra
+  // viewer ver (input fica desabilitado), então o gate não se aplica.
+  const pragasSubTabsReadOnly = inSubcampo ? false : readOnly;
+  const showFocoChips = isFocosLayer(activeLayer) && (inSubcampo || !readOnly);
+  const showHeatmapTool = view === "overview" && !readOnly && !combinersMode
+    && activeLayer !== "trator" && activeLayer !== "trackers" && !isFocosLayer(activeLayer);
+
+  return (
+    <aside style={{
+      width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, flexShrink: 0,
+      transition: "width .18s ease",
+      background: P.navy, position: "relative",
+      display: "flex", flexDirection: "column", height: "100%",
+    }}>
+      <button onClick={onToggleCollapse} title={collapsed ? "Expandir menu" : "Recolher menu"} style={{
+        position: "absolute", top: 20, right: -12, zIndex: 5,
+        width: 24, height: 24, borderRadius: "50%",
+        background: P.blue, border: `2px solid ${P.page}`,
+        color: "#fff", fontSize: 11, cursor: "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
+      }}>{collapsed ? "›" : "‹"}</button>
+
+      <div style={{
+        display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
+        padding: collapsed ? "16px 0" : "16px 16px", justifyContent: collapsed ? "center" : "flex-start",
+        borderBottom: "1px solid rgba(255,255,255,0.1)", overflow: "hidden",
+      }}>
+        <img src="/logo-airbox.jpg" alt="Airbox" style={collapsed
+          ? { width: 60, height: "auto", borderRadius: 4, display: "block" }
+          : { height: 26, borderRadius: 4, flexShrink: 0 }} />
+        {!collapsed && (
+          <div style={{ minWidth: 0 }}>
+            <div style={{ color: "#fff", fontSize: 12.5, fontWeight: 700, letterSpacing: 0.4, lineHeight: 1.25, whiteSpace: "nowrap" }}>
+              UFV SDM
+            </div>
+            <div style={{ color: "rgba(232,237,248,0.55)", fontSize: 8.5, letterSpacing: 0.5, fontFamily: "monospace", lineHeight: 1.3 }}>
+              CONTROLE DE MANUTENÇÃO
+            </div>
+          </div>
+        )}
+      </div>
+
+      {!collapsed && (
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "12px 8px", display: "flex", flexDirection: "column", gap: 16 }}>
+        <div>
+          <SideNavButton active={view === "overview"} collapsed={collapsed} label="Visão geral" onClick={() => onNavigate(null)} />
+
+          {view !== "historico" && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 1, marginTop: 4,
+            marginLeft: 10, paddingLeft: 8, borderLeft: "1px solid rgba(255,255,255,0.16)",
+          }}>
+            {LAYERS.filter((l) => !l.small && !l.hidden).map((l) => {
+              const isPragasGroup = l.group === "pragas";
+              const key = isPragasGroup ? "pragas_c1" : l.key;
+              const on = isPragasGroup
+                ? (activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer))
+                : activeLayer === l.key;
+              return (
+                <SideNavButton key={l.key} active={on} collapsed={collapsed}
+                  label={l.tabLabel || l.label} onClick={() => onChangeLayer(key)} />
+              );
+            })}
+
+            {showFocosSubTabs && !collapsed && (
+              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+                <PragasSubTabs active={activeLayer} onChange={onChangeLayer} readOnly={pragasSubTabsReadOnly} />
+                {showFocoChips && (
+                  <>
+                    <FocoVisitChips active={focoVisit} onChange={onChangeFocoVisit} />
+                    <FocoTypeChips active={focoType} onChange={onChangeFocoType} />
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+          )}
+        </div>
+
+        {!readOnly && (
+        <div>
+          <SideNavButton active={view === "historico"} collapsed={collapsed} label="Histórico" onClick={() => onSelectHistoricoTab(historicoTab)} />
+
+          {view === "historico" && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 1, marginTop: 4,
+            marginLeft: 10, paddingLeft: 8, borderLeft: "1px solid rgba(255,255,255,0.16)",
+          }}>
+            <SideNavButton active={historicoTab === "linha_do_tempo"} collapsed={collapsed}
+              label="Linha do tempo" onClick={() => onSelectHistoricoTab("linha_do_tempo")} />
+            <SideNavButton active={historicoTab === "indicadores"} collapsed={collapsed}
+              label="Indicadores" onClick={() => onSelectHistoricoTab("indicadores")} />
+            <SideNavButton active={historicoTab === "comparar_ciclos"} collapsed={collapsed}
+              label="Comparar ciclos" onClick={() => onSelectHistoricoTab("comparar_ciclos")} />
+            <SideNavButton active={historicoTab === "registrar"} collapsed={collapsed}
+              label="Registrar" onClick={() => onSelectHistoricoTab("registrar")} />
+          </div>
+          )}
+        </div>
+        )}
+
+        {view !== "historico" && (
+        <div>
+          <SideSectionLabel collapsed={collapsed}>FERRAMENTAS</SideSectionLabel>
+          {showHeatmapTool && (
+            <SideToolButton active={heatmap} collapsed={collapsed} label="Heatmap" color={P.accent} onClick={onToggleHeatmap} />
+          )}
+          {!readOnly && (
+            <SideToolButton active={activeLayer === "trator"} collapsed={collapsed} label="Acesso trator"
+              color={P.warn} onClick={() => onChangeLayer(activeLayer === "trator" ? "lavagem" : "trator")} />
+          )}
+          <SideToolButton active={activeLayer === "trackers"} collapsed={collapsed} label="Trackers"
+            color={P.purple} onClick={() => onChangeLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} />
+          {view === "overview" && (
+            <SideToolButton active={combinersMode} collapsed={collapsed} label="Combiners"
+              color={P.info} onClick={onToggleCombiners} />
+          )}
+        </div>
+        )}
+      </div>
+      )}
+
+      {!collapsed && (
+      <div style={{
+        flexShrink: 0, borderTop: "1px solid rgba(255,255,255,0.1)",
+        padding: "12px 12px", display: "flex", flexDirection: "column", gap: 8,
+      }}>
+        {readOnly && (
+          <div title="Somente visualização" style={{
+            display: "flex", alignItems: "center", gap: 6,
+            background: "rgba(77,166,255,0.16)", border: `1px solid ${P.info}55`, color: P.info,
+            borderRadius: 99, padding: "4px 10px", fontSize: 10, fontWeight: 700,
+            fontFamily: "monospace", letterSpacing: 0.4, whiteSpace: "nowrap", overflow: "hidden",
+          }}>
+            SOMENTE VISUALIZAÇÃO
+          </div>
+        )}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, overflow: "hidden" }}>
+          <SyncBadge state={syncState} />
+          {lastUpdated && formatDateTime(lastUpdated) && (
+            <span title={`Atualizado em ${formatDateTime(lastUpdated)}`} style={{
+              color: "rgba(232,237,248,0.55)", fontSize: 10, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+            }}>{formatDateTime(lastUpdated)}</span>
+          )}
+        </div>
+        <button onClick={onLogout} title="Sair" style={{
+          display: "flex", alignItems: "center", gap: 8,
+          width: "100%", background: "transparent", border: "1px solid rgba(255,255,255,0.14)",
+          borderRadius: 8, padding: "7px 10px", cursor: "pointer",
+          color: "rgba(232,237,248,0.72)", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+          transition: "border-color .15s, color .15s",
+        }}
+          onMouseEnter={(e) => { e.currentTarget.style.borderColor = P.danger + "88"; e.currentTarget.style.color = P.danger; }}
+          onMouseLeave={(e) => { e.currentTarget.style.borderColor = "rgba(255,255,255,0.14)"; e.currentTarget.style.color = "rgba(232,237,248,0.72)"; }}
+        >
+          <span style={{ fontSize: 14, lineHeight: 1 }}>⏻</span>
+          Sair
+        </button>
+      </div>
+      )}
+    </aside>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════
+   VIEW DE HISTÓRICO
+   ════════════════════════════════════════════════════════════════════════ */
+const histFieldWrap = { display: "flex", flexDirection: "column", gap: 4 };
+const histFieldLabel = { fontSize: 10.5, color: P.chromeMuted, fontFamily: "monospace" };
+const histFieldInput = {
+  background: P.page, border: `1px solid ${P.chromeBorder}`, color: P.chromeText,
+  borderRadius: 7, padding: "7px 9px", fontSize: 12.5, fontFamily: "inherit", outline: "none",
+};
+
+function StatTile({ label, value }) {
+  return (
+    <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: "14px 18px", flex: "1 1 170px" }}>
+      <div style={{ color: P.chromeMuted, fontSize: 10.5, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 6 }}>{label.toUpperCase()}</div>
+      <div style={{ color: P.chromeText, fontSize: 24, fontWeight: 700 }}>{value}</div>
+    </div>
+  );
+}
+
+function ProgressMeter({ label, done, total, pct, color }) {
+  return (
+    <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: "14px 18px", flex: "1 1 220px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+        <span style={{ color: P.chromeMuted, fontSize: 10.5, fontFamily: "monospace", letterSpacing: 0.5 }}>{label.toUpperCase()}</span>
+        <span style={{ color: P.chromeText, fontSize: 18, fontWeight: 700 }}>{pct}%</span>
+      </div>
+      <div style={{ height: 8, background: color + "22", borderRadius: 99, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 99, transition: "width .3s ease" }} />
+      </div>
+      <div style={{ marginTop: 6, fontSize: 10.5, color: P.chromeMuted, fontFamily: "monospace" }}>{done} / {total} trackers</div>
+    </div>
+  );
+}
+
+function HistEntryRow({ e, onDelete, readOnly }) {
+  const p = histPhase(e.fase);
+  const noActivity = e.fase === "sem_atividade";
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", borderBottom: `1px solid ${P.chromeBorder}`, fontSize: 12, flexWrap: "wrap" }}>
+      <span style={{ color: P.chromeMuted, fontFamily: "monospace", width: noActivity ? 150 : 84, flexShrink: 0 }}>
+        {noActivity && e.dataFim && e.dataFim !== e.data ? `${e.data} → ${e.dataFim}` : e.data}
+      </span>
+      <span style={{ fontWeight: 700, color: P.chromeText, width: 100, flexShrink: 0 }}>
+        {e.subKey === "todos" ? "Todos os subcampos" : `SDM ${e.subKey}`}
+      </span>
+      <span style={{
+        display: "inline-flex", alignItems: "center", gap: 5, padding: "2px 8px", borderRadius: 99,
+        background: p.color + "1e", border: `1px solid ${p.color}55`, color: p.color, fontSize: 10.5, fontWeight: 700, flexShrink: 0,
+      }}>{p.label}</span>
+      {noActivity ? (
+        <span style={{ color: P.chromeMuted, fontSize: 11.5, fontStyle: e.motivo ? "normal" : "italic" }}>
+          {e.motivo || "Sem motivo informado"}
+        </span>
+      ) : (
+        <span style={{ color: P.chromeText, fontFamily: "monospace", fontSize: 11.5 }}>
+          Tracker {pad3(e.trackerDe)}–{pad3(e.trackerAte)} <span style={{ color: P.chromeMuted }}>({histEntryQty(e)})</span>
+        </span>
+      )}
+      {!readOnly && (
+        <button onClick={() => onDelete(e.id)} title="Excluir registro" style={{
+          marginLeft: "auto", background: "transparent", border: "none", color: P.danger,
+          cursor: "pointer", fontSize: 13, flexShrink: 0, padding: 4,
+        }}>✕</button>
+      )}
+    </div>
+  );
+}
+
+function HistRegistrarForm({ onSubmit }) {
+  const [subKey, setSubKey] = useState(SUB_KEYS[0]);
+  const [fase, setFase] = useState("rocagem_trator");
+  const [de, setDe] = useState(1);
+  const [ate, setAte] = useState(132);
+  const [data, setData] = useState(() => new Date().toISOString().slice(0, 10));
+  const [dataFim, setDataFim] = useState("");
+  const [motivo, setMotivo] = useState("");
+  const noActivity = fase === "sem_atividade";
+  const valid = noActivity ? !!data && (!dataFim || dataFim >= data) : !!data && ate >= de;
+  return (
+    <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+      <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", marginBottom: 12, letterSpacing: 0.5 }}>NOVO REGISTRO</div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <label style={histFieldWrap}>
+          <span style={histFieldLabel}>Subcampo</span>
+          <select value={subKey} onChange={(e) => setSubKey(e.target.value)} style={histFieldInput}>
+            {noActivity && <option value="todos">Todos os subcampos</option>}
+            {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
+          </select>
+        </label>
+        <label style={histFieldWrap}>
+          <span style={histFieldLabel}>Fase</span>
+          <select value={fase} onChange={(e) => setFase(e.target.value)} style={histFieldInput}>
+            {HIST_PHASES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </label>
+        {noActivity ? (
+          <>
+            <label style={histFieldWrap}>
+              <span style={histFieldLabel}>Motivo</span>
+              <input type="text" placeholder="Chuva, feriado, manutenção…" value={motivo} onChange={(e) => setMotivo(e.target.value)}
+                style={{ ...histFieldInput, width: 200 }} />
+            </label>
+            <label style={histFieldWrap}>
+              <span style={histFieldLabel}>De</span>
+              <input type="date" value={data} onChange={(e) => setData(e.target.value)} style={histFieldInput} />
+            </label>
+            <label style={histFieldWrap}>
+              <span style={histFieldLabel}>Até (opcional)</span>
+              <input type="date" value={dataFim} onChange={(e) => setDataFim(e.target.value)} style={histFieldInput} />
+            </label>
+          </>
+        ) : (
+          <>
+            <label style={{ ...histFieldWrap, width: 86 }}>
+              <span style={histFieldLabel}>Tracker de</span>
+              <input type="number" min={1} max={132} value={de} onChange={(e) => setDe(+e.target.value)} style={histFieldInput} />
+            </label>
+            <label style={{ ...histFieldWrap, width: 86 }}>
+              <span style={histFieldLabel}>até</span>
+              <input type="number" min={1} max={132} value={ate} onChange={(e) => setAte(+e.target.value)} style={histFieldInput} />
+            </label>
+            <label style={histFieldWrap}>
+              <span style={histFieldLabel}>Data</span>
+              <input type="date" value={data} onChange={(e) => setData(e.target.value)} style={histFieldInput} />
+            </label>
+          </>
+        )}
+        <button disabled={!valid} onClick={() => {
+          if (!valid) return;
+          if (noActivity) {
+            onSubmit({ subKey: subKey || "todos", fase, data, dataFim: dataFim || data, motivo: motivo.trim() });
+            setMotivo(""); setDataFim("");
+          } else {
+            onSubmit({ subKey, fase, trackerDe: de, trackerAte: ate, data });
+          }
+        }} style={{
+          background: valid ? P.blue : P.chromeBorder, border: "none", color: valid ? "#fff" : P.chromeMuted,
+          borderRadius: 8, padding: "8px 18px", fontSize: 12.5, fontWeight: 700,
+          cursor: valid ? "pointer" : "default", fontFamily: "inherit",
+        }}>Registrar</button>
+      </div>
+      {fase === "rocagem_acabamento" && data.slice(0, 4) === String(new Date().getFullYear()) && (
+        <div style={{ marginTop: 10, fontSize: 11, color: P.chromeMuted }}>
+          ✓ Isso também marca os trackers {pad3(de)}–{pad3(ate)} do SDM {subKey} como <b>Concluída</b> na camada de Roçagem.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistTimelineTab({ entries, onDelete, readOnly }) {
+  const [subFilter, setSubFilter] = useState("all");
+  const [faseFilter, setFaseFilter] = useState("all");
+  const filtered = entries.filter((e) =>
+    (subFilter === "all" || e.subKey === subFilter || e.subKey === "todos") &&
+    (faseFilter === "all" || e.fase === faseFilter)
+  );
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select value={subFilter} onChange={(e) => setSubFilter(e.target.value)} style={histFieldInput}>
+          <option value="all">Todos os subcampos</option>
+          {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
+        </select>
+        <select value={faseFilter} onChange={(e) => setFaseFilter(e.target.value)} style={histFieldInput}>
+          <option value="all">Todas as fases</option>
+          {HIST_PHASES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        </select>
+      </div>
+      <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden" }}>
+        {filtered.length === 0 ? (
+          <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro encontrado.</div>
+        ) : filtered.map((e) => <HistEntryRow key={e.id} e={e} onDelete={onDelete} readOnly={readOnly} />)}
+      </div>
+    </div>
+  );
+}
+
+function HorizBarList({ items, getLabel, getValue, getDisplay, getTitle, color = "#2a78d6" }) {
+  const max = Math.max(1, ...items.map(getValue));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {items.map((d, i) => (
+        <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }} title={getTitle ? getTitle(d) : undefined}>
+          <span style={{ width: 96, flexShrink: 0, fontSize: 11.5, fontWeight: 700, color: P.chromeText, fontFamily: "monospace" }}>{getLabel(d)}</span>
+          <div style={{ flex: 1, height: 16, background: P.page, borderRadius: 4, overflow: "hidden" }}>
+            <div style={{
+              height: "100%", width: `${Math.max(2, (getValue(d) / max) * 100)}%`, background: color,
+              borderRadius: "0 4px 4px 0", transition: "width .3s ease",
+            }} />
+          </div>
+          <span style={{ width: 80, flexShrink: 0, textAlign: "right", fontSize: 11.5, fontFamily: "monospace", color: P.chromeMuted }}>
+            {getDisplay(d)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TratorAcabamentoChart({ data }) {
+  const max = Math.max(1, ...data.flatMap((d) => [d.trator, d.acabamento]));
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <div style={{ display: "flex", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: P.warn, flexShrink: 0 }} />
+          <span style={{ fontSize: 11.5, color: P.chromeText, fontWeight: 600 }}>Trator</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 10, height: 10, borderRadius: 2, background: P.done, flexShrink: 0 }} />
+          <span style={{ fontSize: 11.5, color: P.chromeText, fontWeight: 600 }}>Acabamento</span>
+        </div>
+      </div>
+      {data.map((d) => (
+        <div key={d.subKey}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: P.chromeText, fontFamily: "monospace", marginBottom: 5 }}>
+            SDM {d.subKey}
+            {d.gap > 0 && <span style={{ color: P.warn, fontWeight: 600, fontFamily: "inherit" }}> · {d.gap} trackers aguardando acabamento</span>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+            {[["Trator", d.trator, P.warn], ["Acabamento", d.acabamento, P.done]].map(([label, v, color]) => (
+              <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ width: 76, flexShrink: 0, fontSize: 10, color: P.chromeMuted, fontFamily: "monospace" }}>{label}</span>
+                <div style={{ flex: 1, height: 12, background: P.page, borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%", width: `${v > 0 ? Math.max(2, (v / max) * 100) : 0}%`,
+                    background: color, borderRadius: "0 4px 4px 0",
+                  }} />
+                </div>
+                <span style={{ width: 40, flexShrink: 0, textAlign: "right", fontSize: 10, fontFamily: "monospace", color: P.chromeMuted }}>{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function YearCompareChart({ yearKeys, years }) {
+  const max = Math.max(1, ...yearKeys.flatMap((y) => HIST_WORK_PHASES.map((p) => years[y]?.[p.key] || 0)));
+  return (
+    <div>
+      {yearKeys.length > 1 && (
+        <div style={{ display: "flex", gap: 16, marginBottom: 14, flexWrap: "wrap" }}>
+          {yearKeys.map((y, i) => (
+            <div key={y} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: HIST_YEAR_PALETTE[i], flexShrink: 0 }} />
+              <span style={{ fontSize: 11.5, color: P.chromeText, fontWeight: 600 }}>{y}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {HIST_WORK_PHASES.map((p) => (
+          <div key={p.key}>
+            <div style={{ fontSize: 11.5, color: P.chromeMuted, marginBottom: 6, fontFamily: "monospace" }}>{p.label}</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+              {yearKeys.map((y, i) => {
+                const v = years[y]?.[p.key] || 0;
+                return (
+                  <div key={y} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ width: 40, flexShrink: 0, fontSize: 10.5, color: P.chromeMuted, fontFamily: "monospace" }}>{y}</span>
+                    <div style={{ flex: 1, height: 14, background: P.page, borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{
+                        height: "100%", width: `${v > 0 ? Math.max(2, (v / max) * 100) : 0}%`,
+                        background: HIST_YEAR_PALETTE[i], borderRadius: "0 4px 4px 0",
+                      }} />
+                    </div>
+                    <span style={{ width: 50, flexShrink: 0, textAlign: "right", fontSize: 10.5, fontFamily: "monospace", color: P.chromeMuted }}>{v}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
+  const entries = useMemo(() => getHistoryEntries(statuses), [statuses]);
+  const sortedEntries = useMemo(() => [...entries].sort((a, b) => b.data.localeCompare(a.data)), [entries]);
+
+  const addEntry = useCallback((entry) => {
+    setStatuses((prev) => {
+      const list = [...(prev._history || []), {
+        ...entry, id: `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`, createdAt: new Date().toISOString(),
+      }];
+      let next = { ...prev, _history: list };
+
+      // Acabamento de roçagem do ano corrente marca automaticamente esse
+      // trecho como "Concluída" na camada de Roçagem — só no momento deste
+      // registro novo (nunca reprocessando o histórico inteiro de novo) e
+      // só GRAVANDO o estado concluído, nunca apagando/resetando nada. Isso
+      // preserva trackers que já estavam concluídos direto na camada de
+      // Roçagem sem passar pelo Histórico. Backfill de anos anteriores
+      // (registro retroativo de ciclo passado) não mexe na camada atual.
+      const currentYear = String(new Date().getFullYear());
+      if (entry.fase === "rocagem_acabamento" && entry.data.slice(0, 4) === currentYear) {
+        const subData = { ...(next[entry.subKey] || {}) };
+        for (let n = entry.trackerDe; n <= entry.trackerAte; n++) {
+          const cur = getStatus({ [entry.subKey]: subData }, entry.subKey, n);
+          const updated = [...cur];
+          updated[LAYER_IDX.rocagem] = LAYER_DONE_IDX.rocagem;
+          subData[n] = updated;
+        }
+        next = { ...next, [entry.subKey]: subData };
+      }
+
+      return next;
+    });
+  }, [setStatuses]);
+
+  const deleteEntry = useCallback((id) => {
+    setStatuses((prev) => ({ ...prev, _history: (prev._history || []).filter((e) => e.id !== id) }));
+  }, [setStatuses]);
+
+  // Viewer nunca deve cair na aba de edição, mesmo que tenha ficado
+  // selecionada de uma sessão admin anterior no mesmo navegador.
+  const tab = readOnly && historicoTab === "registrar" ? "linha_do_tempo" : historicoTab;
+
+  if (tab === "registrar") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
+        <HistRegistrarForm onSubmit={addEntry} />
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden" }}>
+          <div style={{ padding: "10px 14px", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>
+            ÚLTIMOS REGISTROS
+          </div>
+          {sortedEntries.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro ainda.</div>
+          ) : sortedEntries.slice(0, 12).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
+        </div>
+      </div>
+    );
+  }
+
+  if (tab === "indicadores") {
+    const rankingRocagem = computeSpeedRanking(entries, "rocagem_acabamento");
+    const rankingLavagem = computeSpeedRanking(entries, "lavagem");
+    const tratorVsAcabamento = computeTratorVsAcabamento(entries);
+    const downtime = computeDowntimeByMotivo(entries);
+    const progRocagem = computeLiveProgress(statuses, "rocagem");
+    const progLavagem = computeLiveProgress(statuses, "lavagem");
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <ProgressMeter label="Roçagem concluída (usina)" done={progRocagem.done} total={progRocagem.total} pct={progRocagem.pct} color={P.done} />
+          <ProgressMeter label="Lavagem concluída (usina)" done={progLavagem.done} total={progLavagem.total} pct={progLavagem.pct} color={P.info} />
+          <StatTile label="Registros no histórico" value={entries.length} />
+          <StatTile label="Dias sem atividade" value={downtime.totalDays} />
+        </div>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de velocidade — Roçagem</div>
+            <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+              Trackers com acabamento concluído por dia corrido, do mais rápido ao mais lento.
+            </div>
+            {rankingRocagem.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de acabamento de roçagem ainda.</div>
+            ) : (
+              <HorizBarList items={rankingRocagem} color="#2a78d6"
+                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.rate} getDisplay={(d) => `${d.rate.toFixed(1)}/dia`}
+                getTitle={(d) => `${d.qty} trackers em ${d.days} dia(s)`} />
+            )}
+          </div>
+
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de velocidade — Lavagem</div>
+            <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+              Trackers lavados registrados por dia corrido, do mais rápido ao mais lento.
+            </div>
+            {rankingLavagem.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de lavagem ainda.</div>
+            ) : (
+              <HorizBarList items={rankingLavagem} color="#1baf7a"
+                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.rate} getDisplay={(d) => `${d.rate.toFixed(1)}/dia`}
+                getTitle={(d) => `${d.qty} trackers em ${d.days} dia(s)`} />
+            )}
+          </div>
+        </div>
+
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Trator × Acabamento por subcampo</div>
+          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+            Trackers passados pelo trator vs. com acabamento concluído — mostra onde o acabamento está atrasado em relação ao trator.
+          </div>
+          {tratorVsAcabamento.length === 0 ? (
+            <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de roçagem ainda.</div>
+          ) : <TratorAcabamentoChart data={tratorVsAcabamento} />}
+        </div>
+
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Paradas por motivo</div>
+          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+            Total de dias sem atividade registrados, agrupados por motivo.
+          </div>
+          {downtime.list.length === 0 ? (
+            <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem paradas registradas ainda.</div>
+          ) : (
+            <HorizBarList items={downtime.list} color={P.warn}
+              getLabel={(d) => d.label} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`} />
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (tab === "comparar_ciclos") {
+    const { yearKeys, years } = computeYearCompare(entries);
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Comparativo entre ciclos</div>
+          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+            Total de trackers concluídos por fase, agrupado por ano (com base na data de cada registro). Últimos 3 anos com dados.
+          </div>
+          {yearKeys.length === 0 ? (
+            <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros suficientes pra comparar ciclos ainda.</div>
+          ) : <YearCompareChart yearKeys={yearKeys} years={years} />}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ height: "100%", overflowY: "auto" }}>
+      <HistTimelineTab entries={sortedEntries} onDelete={deleteEntry} readOnly={readOnly} />
+    </div>
+  );
+}
+
 export default function App() {
   const [overlayPhase, setOverlayPhase] = useState("login"); // login | loading | fadeout | done
   const [readOnly, setReadOnly] = useState(true);
@@ -1868,6 +2594,21 @@ export default function App() {
   const [combinersMode, setCombinersMode] = useState(false);
   const [focoType, setFocoType] = useState("formigas");
   const [focoVisit, setFocoVisit] = useState("v1");
+  const [historicoTab, setHistoricoTab] = useState("linha_do_tempo");
+  const selectHistoricoTab = useCallback((tab) => {
+    setHistoricoTab(tab);
+    setView("historico");
+  }, []);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem("sdm_sidebar_collapsed") === "1"; } catch { return false; }
+  });
+  const toggleSidebar = useCallback(() => {
+    setSidebarCollapsed((v) => {
+      const next = !v;
+      try { localStorage.setItem("sdm_sidebar_collapsed", next ? "1" : "0"); } catch {}
+      return next;
+    });
+  }, []);
   const setActiveLayer = (layer) => {
     // Escolher qualquer camada normal sai do modo Combiners — senão o botão
     // fica "ativo" e o mapa não muda, dando a impressão de bug.
@@ -2005,9 +2746,9 @@ export default function App() {
 
   return (
     <div style={{
-      height: "100vh", background: P.bg, color: P.text,
+      height: "100vh", background: P.page, color: P.chromeText,
       fontFamily: "'IBM Plex Sans','Segoe UI',sans-serif",
-      display: "flex", flexDirection: "column", overflow: "hidden",
+      display: "flex", flexDirection: "row", overflow: "hidden",
     }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@500;700&display=swap');
@@ -2017,125 +2758,86 @@ export default function App() {
         @keyframes dotPulse{0%,80%,100%{opacity:.2;transform:scale(.7)}40%{opacity:1;transform:scale(1)}}
         @keyframes shake{0%,100%{transform:translateX(0) translateY(-50%)}20%,60%{transform:translateX(-6px) translateY(-50%)}40%,80%{transform:translateX(6px) translateY(-50%)}}
         @keyframes fadeSlideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-        ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:${P.surface}}::-webkit-scrollbar-thumb{background:${P.border};border-radius:4px}
+        ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${P.blue};border-radius:4px;opacity:.5}
+        *{scrollbar-color:${P.blue} transparent;scrollbar-width:thin}
         select, input, button { font-family: inherit; }
-        button:hover { filter: brightness(1.12); }
-        html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #0b0f1e; }
+        button:hover { filter: brightness(1.06); }
+        html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: ${P.page}; }
       `}</style>
 
       {overlayPhase !== "done" && <LoginOverlay phase={overlayPhase} onLogin={handleLogin} />}
 
-      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "12px 16px", minHeight: 0 }}>
+      <Sidebar
+        collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar}
+        view={view} onNavigate={(key) => setView(key || "overview")}
+        activeLayer={activeLayer} onChangeLayer={setActiveLayer}
+        readOnly={readOnly}
+        heatmap={heatmap} onToggleHeatmap={() => setHeatmap((h) => !h)}
+        combinersMode={combinersMode}
+        onToggleCombiners={() => setCombinersMode((v) => {
+          const next = !v;
+          if (next) {
+            setHeatmap(false);
+            // Combiners é um modo à parte — se Trackers (ou Trator) estava
+            // ativo, mantê-lo "aceso" ao lado de Combiners passava a
+            // impressão de dois modos ativos ao mesmo tempo.
+            if (activeLayer === "trackers" || activeLayer === "trator") setActiveLayerRaw("lavagem");
+          }
+          return next;
+        })}
+        focoType={focoType} onChangeFocoType={setFocoType}
+        focoVisit={focoVisit} onChangeFocoVisit={setFocoVisit}
+        historicoTab={historicoTab} onSelectHistoricoTab={selectHistoricoTab}
+        syncState={syncState} lastUpdated={lastUpdated}
+        onLogout={handleLogout}
+      />
 
-      <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "14px 18px", minHeight: 0, minWidth: 0, overflow: "hidden" }}>
         <div style={{
-          display: "flex", alignItems: "center", gap: 16, marginBottom: 10, flexShrink: 0,
-          background: P.navy, borderRadius: 10, padding: "8px 16px",
-          border: `1px solid ${P.accent}33`,
+          display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexShrink: 0,
+          background: P.navy, borderRadius: 10, padding: "10px 16px",
+          border: "1px solid rgba(255,255,255,0.1)",
         }}>
-          <img src="/logo-airbox.jpg" alt="Airbox" style={{ height: 32, borderRadius: 4, flexShrink: 0 }} />
-          <div style={{ width: 1, height: 28, background: `${P.accent}44`, flexShrink: 0 }} />
-          <div>
-            <div style={{ color: P.accent, fontSize: 13, fontWeight: 700, letterSpacing: 0.5, lineHeight: 1.2 }}>
-              UFV SDM — Serra do Mato
-            </div>
-            <div style={{ color: P.muted, fontSize: 10, letterSpacing: 1, fontFamily: "monospace" }}>
-              CONTROLE DE MANUTENÇÃO
-            </div>
-          </div>
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-            {readOnly && (
-              <span style={{
-                background: P.info + "22", border: `1px solid ${P.info}55`, color: P.info,
-                borderRadius: 99, padding: "3px 10px", fontSize: 10, fontWeight: 700,
-                fontFamily: "monospace", letterSpacing: 0.5,
-              }}>SOMENTE VISUALIZAÇÃO</span>
-            )}
-            {lastUpdated && formatDateTime(lastUpdated) && (
-              <span title={`Atualizado em ${formatDateTime(lastUpdated)}`} style={{
-                display: "flex", alignItems: "center", gap: 5,
-                border: `1px solid ${P.border}`, borderRadius: 99, padding: "3px 10px",
-                color: P.muted, fontSize: 10, fontFamily: "monospace", letterSpacing: 0.3,
-              }}>
-                <span style={{ opacity: 0.6 }}>↻</span>{formatDateTime(lastUpdated)}
+          {view !== "overview" && (
+            <button onClick={() => setView("overview")} title="Voltar à visão geral" style={{
+              display: "flex", alignItems: "center", justifyContent: "center",
+              background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff",
+              borderRadius: 7, width: 28, height: 28, cursor: "pointer", fontSize: 14, flexShrink: 0,
+            }}>←</button>
+          )}
+          <h1 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0, whiteSpace: "nowrap" }}>
+            {view === "overview" ? "Visão geral" : view === "historico" ? "Histórico" : `SDM ${view}`}
+          </h1>
+          {sidebarCollapsed && (
+            <>
+              <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 15, fontWeight: 400 }}>/</span>
+              <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
+                {view === "historico" ? HISTORICO_TAB_LABELS[historicoTab] : layerDisplayLabel(activeLayer)}
               </span>
-            )}
-            <SyncBadge state={syncState} />
-            <button onClick={handleLogout} title="Sair" style={{
-              background: "transparent", border: `1px solid ${P.border}`,
-              borderRadius: 7, padding: "4px 7px", cursor: "pointer",
-              color: P.muted, fontSize: 14, lineHeight: 1, display: "flex", alignItems: "center",
-              transition: "border-color .15s, color .15s",
-            }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = P.danger + "88"; e.currentTarget.style.color = P.danger; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = P.border; e.currentTarget.style.color = P.muted; }}
-            >⏻</button>
-          </div>
+            </>
+          )}
+          {view !== "overview" && view !== "historico" && (
+            <select value={view} onChange={(e) => setView(e.target.value)} style={{
+              marginLeft: 4, background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff",
+              borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontFamily: "inherit", fontWeight: 600,
+              cursor: "pointer", outline: "none",
+            }}>
+              {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
+            </select>
+          )}
         </div>
 
         {!loaded ? (
-          <div style={{ color: P.muted, fontSize: 13 }}>Carregando status salvo...</div>
+          <div style={{ color: P.chromeMuted, fontSize: 13 }}>Carregando status salvo...</div>
         ) : view === "overview" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: 1, minHeight: 0 }}>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", flexShrink: 0 }}>
-              <LayerTabs active={activeLayer} onChange={setActiveLayer} />
-              {(activeLayer === "pragas_c1" || activeLayer === "pragas_c2" || isFocosLayer(activeLayer)) && (
-                <>
-                  <PragasSubTabs active={activeLayer} onChange={setActiveLayer} readOnly={readOnly} />
-                  {!readOnly && isFocosLayer(activeLayer) && <>
-                    <FocoVisitChips active={focoVisit} onChange={setFocoVisit} />
-                    <FocoTypeChips active={focoType} onChange={setFocoType} />
-                  </>}
-                </>
-              )}
-              {!readOnly && !combinersMode && activeLayer !== "trator" && activeLayer !== "trackers" && !isFocosLayer(activeLayer) && (
-                <button onClick={() => setHeatmap((h) => !h)} style={{
-                  padding: "4px 10px", borderRadius: 7,
-                  border: `1px solid ${heatmap ? P.accent + "55" : P.border}`,
-                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                  background: heatmap ? P.accent : "transparent",
-                  color: heatmap ? "#111827" : P.muted, transition: "all .12s",
-                }}>
-                  Heatmap
-                </button>
-              )}
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: "auto" }}>
-                {!readOnly && (
-                  <button onClick={() => setActiveLayer(activeLayer === "trator" ? "lavagem" : "trator")} style={{
-                    padding: "4px 10px", borderRadius: 7,
-                    border: `1px solid ${activeLayer === "trator" ? P.warn + "66" : P.border}`,
-                    cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                    background: activeLayer === "trator" ? P.warn + "22" : "transparent",
-                    color: activeLayer === "trator" ? P.warn : P.muted, transition: "all .12s",
-                  }}>
-                    Acesso trator
-                  </button>
-                )}
-                <button onClick={() => setActiveLayer(activeLayer === "trackers" ? "lavagem" : "trackers")} style={{
-                  padding: "4px 10px", borderRadius: 7,
-                  border: `1px solid ${activeLayer === "trackers" ? P.purple + "66" : P.border}`,
-                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                  background: activeLayer === "trackers" ? P.purple + "22" : "transparent",
-                  color: activeLayer === "trackers" ? P.purple : P.muted, transition: "all .12s",
-                }}>
-                  Trackers
-                </button>
-                <button onClick={() => setCombinersMode((v) => { const next = !v; if (next) setHeatmap(false); return next; })} style={{
-                  padding: "4px 10px", borderRadius: 7,
-                  border: `1px solid ${combinersMode ? P.info + "66" : P.border}`,
-                  cursor: "pointer", fontFamily: "inherit", fontSize: 11, fontWeight: 600,
-                  background: combinersMode ? P.info + "22" : "transparent",
-                  color: combinersMode ? P.info : P.muted, transition: "all .12s",
-                }}>
-                  Combiners
-                </button>
-              </div>
-            </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, flex: 1, minHeight: 0 }}>
             {!heatmap && mapZoom > 15 && !isFocosLayer(activeLayer) && !combinersMode && <Legend activeLayer={activeLayer} />}
             <OverviewMap statuses={statuses} activeLayer={activeLayer} onSelect={readOnly ? () => {} : setView} heatmap={heatmap} onZoomChange={setMapZoom}
               focoType={focoType} focoVisit={focoVisit} onToggleActivity={readOnly ? null : toggleActivity}
               combinersMode={combinersMode} />
           </div>
+        ) : view === "historico" ? (
+          readOnly ? null : <HistoricoView statuses={statuses} setStatuses={setStatusesByUser} readOnly={readOnly} historicoTab={historicoTab} />
         ) : (
           <div style={{ flex: 1, minHeight: 0 }}>
             <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatusesByUser}
@@ -2145,7 +2847,6 @@ export default function App() {
               focoVisit={focoVisit} setFocoVisit={setFocoVisit} />
           </div>
         )}
-      </div>
       </div>
     </div>
   );
