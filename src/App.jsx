@@ -274,6 +274,66 @@ function computeDowntimeByMotivo(entries) {
   });
   return { totalDays, list: Object.values(byMotivo).sort((a, b) => b.days - a.days) };
 }
+// Importação em lote — cola linhas de planilha (Dia / Dia da semana /
+// Subcampo / Tracker inicial / Tracker final / Trackers / Obs) e vira uma
+// lista de registros prontos pra empurrar um a um pro mesmo addEntry do
+// formulário normal (mesma lógica, inclusive o auto-preenchimento de
+// Roçagem). Intervalos partidos anotados na coluna Obs (ex.: "61-65 +
+// 73-80") são detectados e viram registros separados; linhas sem trecho
+// de tracker identificável (nº "0-0", linha em branco, etc.) são
+// ignoradas e listadas pra revisão manual, nunca "chutadas".
+function parseBulkRocagemText(rawText, fase) {
+  const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const entries = [];
+  const skipped = [];
+  const subKeySet = new Set(SUB_KEYS);
+
+  for (const line of lines) {
+    if (/^dia\b/i.test(line) && /subcampo/i.test(line)) continue; // cabeçalho colado junto
+
+    let cols = line.split("\t");
+    if (cols.length < 3) cols = line.split(/ {2,}/);
+    cols = cols.map((c) => c.trim());
+
+    const [dataRaw, , subKeyRaw, deRaw, ateRaw] = cols;
+    const subKey = (subKeyRaw || "").trim();
+
+    const dm = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((dataRaw || "").trim());
+    if (!dm) { skipped.push({ sourceLine: line, reason: "Data inválida ou ausente" }); continue; }
+    const iso = `${dm[3]}-${dm[2].padStart(2, "0")}-${dm[1].padStart(2, "0")}`;
+
+    if (!subKeySet.has(subKey)) { skipped.push({ sourceLine: line, reason: `Subcampo "${subKey || "—"}" não reconhecido` }); continue; }
+
+    // Procura intervalos "N-N" em tudo que vem depois do subcampo (tracker
+    // inicial/final/qtd/obs juntos), não só numa coluna "obs" isolada —
+    // assim não depende de colunas em branco terem ficado alinhadas
+    // certinho no recorte (célula vazia no meio da linha some no split por
+    // espaço, empurrando as colunas seguintes).
+    const tail = cols.slice(3).join(" ");
+    const obs = tail;
+    const obsRanges = [...tail.matchAll(/(\d+)\s*-\s*(\d+)/g)].map((m) => [+m[1], +m[2]]);
+    let ranges = [];
+    if (obsRanges.length >= 2) {
+      ranges = obsRanges;
+    } else {
+      const de = parseInt(deRaw, 10), ate = parseInt(ateRaw, 10);
+      if (Number.isFinite(de) && Number.isFinite(ate) && de > 0 && ate >= de) {
+        ranges = [[de, ate]];
+      } else if (obsRanges.length === 1) {
+        ranges = obsRanges;
+      }
+    }
+
+    if (ranges.length === 0) {
+      skipped.push({ sourceLine: line, reason: obs ? `Sem trecho de tracker claro (obs: "${obs}")` : "Sem trecho de tracker informado" });
+      continue;
+    }
+
+    ranges.forEach(([de, ate]) => entries.push({ subKey, fase, trackerDe: de, trackerAte: ate, data: iso }));
+  }
+
+  return { entries, skipped };
+}
 function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
   return LAYERS.map((l, i) => Math.min(arr[i] ?? 0, l.states.length - 1));
@@ -2300,6 +2360,110 @@ function HistRegistrarForm({ onSubmit }) {
   );
 }
 
+function HistBulkImport({ onSubmitEntry }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const [fase, setFase] = useState("rocagem_acabamento");
+  const [preview, setPreview] = useState(null);
+  const [done, setDone] = useState(null);
+
+  const handleParse = () => {
+    setPreview(parseBulkRocagemText(text, fase));
+    setDone(null);
+  };
+
+  const handleConfirm = () => {
+    if (!preview || preview.entries.length === 0) return;
+    preview.entries.forEach((e) => onSubmitEntry(e));
+    setDone(preview.entries.length);
+    setPreview(null);
+    setText("");
+  };
+
+  return (
+    <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+      <button onClick={() => setOpen((v) => !v)} style={{
+        width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+        background: "transparent", border: "none", cursor: "pointer", padding: 0,
+        color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5,
+      }}>
+        <span>IMPORTAÇÃO EM LOTE (colar de planilha)</span>
+        <span>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && (
+        <div style={{ marginTop: 12 }}>
+          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
+            Cole as linhas da planilha — colunas Dia, Dia da semana, Subcampo, Tracker inicial, Tracker final, Trackers, Obs (uma linha por registro, separadas por Tab, como copiado do Excel/Sheets). Intervalos partidos na coluna Obs (ex.: "61-65 + 73-80") viram registros separados automaticamente. Linhas sem trecho identificável ficam de fora e aparecem listadas pra você revisar.
+          </div>
+          <label style={{ ...histFieldWrap, marginBottom: 10 }}>
+            <span style={histFieldLabel}>Fase (aplicada a todas as linhas coladas)</span>
+            <select value={fase} onChange={(e) => setFase(e.target.value)} style={{ ...histFieldInput, width: 260 }}>
+              {HIST_WORK_PHASES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </label>
+          <textarea value={text} onChange={(e) => setText(e.target.value)} rows={7}
+            placeholder={"25/05/2026\tSegunda-Feira\t4.6\t61\t72\t12\t"}
+            style={{ width: "100%", ...histFieldInput, fontFamily: "monospace", fontSize: 11, resize: "vertical" }} />
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button disabled={!text.trim()} onClick={handleParse} style={{
+              background: text.trim() ? P.blueG : P.chromeBorder, border: `1px solid ${text.trim() ? P.blue + "66" : P.chromeBorder}`,
+              color: text.trim() ? P.blue : P.chromeMuted, borderRadius: 8, padding: "7px 16px",
+              fontSize: 12, fontWeight: 700, cursor: text.trim() ? "pointer" : "default", fontFamily: "inherit",
+            }}>Analisar</button>
+            {preview && preview.entries.length > 0 && (
+              <button onClick={handleConfirm} style={{
+                background: P.blue, border: "none", color: "#fff", borderRadius: 8,
+                padding: "7px 16px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+              }}>Confirmar importação ({preview.entries.length})</button>
+            )}
+          </div>
+
+          {preview && (
+            <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
+              {preview.entries.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: P.chromeMuted, marginBottom: 6 }}>
+                    {preview.entries.length} registro(s) prontos pra importar:
+                  </div>
+                  <div style={{ maxHeight: 200, overflowY: "auto", border: `1px solid ${P.chromeBorder}`, borderRadius: 8 }}>
+                    {preview.entries.map((e, i) => (
+                      <div key={i} style={{ padding: "5px 10px", fontSize: 11, fontFamily: "monospace", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeText }}>
+                        {e.data} · SDM {e.subKey} · Tracker {pad3(e.trackerDe)}–{pad3(e.trackerAte)}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {preview.skipped.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 11, color: P.warn, marginBottom: 6 }}>
+                    {preview.skipped.length} linha(s) ignorada(s) — revise e adicione manualmente se necessário:
+                  </div>
+                  <div style={{ maxHeight: 160, overflowY: "auto", border: `1px solid ${P.warn}55`, borderRadius: 8 }}>
+                    {preview.skipped.map((s, i) => (
+                      <div key={i} style={{ padding: "6px 10px", fontSize: 10.5, borderBottom: `1px solid ${P.chromeBorder}` }}>
+                        <div style={{ color: P.warn, fontWeight: 600 }}>{s.reason}</div>
+                        <div style={{ color: P.chromeMuted, fontFamily: "monospace" }}>{s.sourceLine}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {preview.entries.length === 0 && preview.skipped.length === 0 && (
+                <div style={{ color: P.chromeMuted, fontSize: 12 }}>Nada reconhecido no texto colado.</div>
+              )}
+            </div>
+          )}
+
+          {done != null && (
+            <div style={{ marginTop: 10, color: P.done, fontSize: 12, fontWeight: 700 }}>✓ {done} registro(s) importado(s) com sucesso.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function HistTimelineTab({ entries, onDelete, readOnly }) {
   const [subFilter, setSubFilter] = useState("all");
   const [faseFilter, setFaseFilter] = useState("all");
@@ -2478,6 +2642,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
         <HistRegistrarForm onSubmit={addEntry} />
+        <HistBulkImport onSubmitEntry={addEntry} />
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden" }}>
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>
             ÚLTIMOS REGISTROS
