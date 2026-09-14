@@ -487,6 +487,52 @@ function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
   return LAYERS.map((l, i) => Math.min(arr[i] ?? 0, l.states.length - 1));
 }
+// Usado pelo Histórico pra marcar automaticamente um trecho como
+// "concluído" numa camada (Roçagem ou Acesso trator) quando um registro
+// novo é criado — só grava o estado concluído, nunca desmarca nada.
+function applyLayerRangeDone(statuses, subKey, layerKey, trackerDe, trackerAte) {
+  const subData = { ...(statuses[subKey] || {}) };
+  for (let n = trackerDe; n <= trackerAte; n++) {
+    const cur = getStatus({ [subKey]: subData }, subKey, n);
+    const updated = [...cur];
+    updated[LAYER_IDX[layerKey]] = LAYER_DONE_IDX[layerKey];
+    subData[n] = updated;
+  }
+  return { ...statuses, [subKey]: subData };
+}
+// Acha registros já existentes (mesmo subcampo + fase + ano) cujo trecho
+// de tracker cruza com o intervalo [de, ate] que está sendo cadastrado —
+// usado pra bloquear duplicidade no formulário de Registrar.
+function findOverlappingEntries(existingEntries, subKey, fase, year, de, ate) {
+  return existingEntries.filter((e) =>
+    e.subKey === subKey && e.fase === fase && e.data.slice(0, 4) === year &&
+    e.trackerDe != null && e.trackerAte != null &&
+    e.trackerDe <= ate && e.trackerAte >= de
+  );
+}
+// Mesma checagem de sobreposição, aplicada na importação em lote — tanto
+// contra o histórico já salvo quanto entre as próprias linhas coladas
+// (evita colar a mesma planilha duas vezes por engano).
+function dedupeBulkEntries(parsedEntries, existingEntries) {
+  const kept = [];
+  const skipped = [];
+  const accepted = existingEntries.filter((e) => e.trackerDe != null);
+  parsedEntries.forEach((entry) => {
+    if (entry.fase === "sem_atividade") { kept.push(entry); return; }
+    const year = entry.data.slice(0, 4);
+    const hit = findOverlappingEntries(accepted, entry.subKey, entry.fase, year, entry.trackerDe, entry.trackerAte)[0];
+    if (hit) {
+      skipped.push({
+        sourceLine: `${entry.data} · SDM ${entry.subKey} · Tracker ${entry.trackerDe}-${entry.trackerAte}`,
+        reason: `Já existe registro cobrindo tracker ${hit.trackerDe}-${hit.trackerAte} em ${hit.data} (${year}) — sobreposição`,
+      });
+    } else {
+      kept.push(entry);
+      accepted.push(entry);
+    }
+  });
+  return { kept, skipped };
+}
 function getActivity(statuses, subKey) {
   const a = statuses._activity && statuses._activity[subKey];
   return { rocagem: !!(a && a.rocagem), lavagem: !!(a && a.lavagem) };
@@ -2427,7 +2473,7 @@ function HistEntryRow({ e, onDelete, readOnly }) {
   );
 }
 
-function HistRegistrarForm({ onSubmit }) {
+function HistRegistrarForm({ onSubmit, entries }) {
   const [subKey, setSubKey] = useState(SUB_KEYS[0]);
   const [fase, setFase] = useState("rocagem_trator");
   const [de, setDe] = useState(1);
@@ -2439,7 +2485,12 @@ function HistRegistrarForm({ onSubmit }) {
   const [savedMsg, setSavedMsg] = useState(false);
   const noActivity = fase === "sem_atividade";
   const toggleMotivo = (key) => setMotivos((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
-  const valid = noActivity ? !!data && (!dataFim || dataFim >= data) : !!data && ate >= de;
+  const overlaps = !noActivity && data && ate >= de
+    ? findOverlappingEntries(entries || [], subKey, fase, data.slice(0, 4), de, ate)
+    : [];
+  const valid = noActivity
+    ? !!data && (!dataFim || dataFim >= data)
+    : !!data && ate >= de && overlaps.length === 0;
   return (
     <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
       <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", marginBottom: 12, letterSpacing: 0.5 }}>NOVO REGISTRO</div>
@@ -2486,6 +2537,16 @@ function HistRegistrarForm({ onSubmit }) {
         )}
       </div>
 
+      {!noActivity && overlaps.length > 0 && (
+        <div style={{
+          marginTop: 12, padding: "8px 12px", borderRadius: 8,
+          background: P.danger + "18", border: `1px solid ${P.danger}55`, color: P.danger, fontSize: 11.5,
+        }}>
+          ⚠ Trecho já registrado: tracker {pad3(overlaps[0].trackerDe)}–{pad3(overlaps[0].trackerAte)} do SDM {subKey} já tem{" "}
+          {histPhase(fase).label} em {overlaps[0].data} ({data.slice(0, 4)}). Ajuste o intervalo pra não sobrepor, ou apague o registro antigo primeiro se for correção.
+        </div>
+      )}
+
       {noActivity && (
         <div style={{ marginTop: 12 }}>
           <span style={histFieldLabel}>Motivo (pode marcar mais de um)</span>
@@ -2527,11 +2588,16 @@ function HistRegistrarForm({ onSubmit }) {
           ✓ Isso também marca os trackers {pad3(de)}–{pad3(ate)} do SDM {subKey} como <b>Concluída</b> na camada de Roçagem.
         </div>
       )}
+      {fase === "rocagem_trator" && (
+        <div style={{ marginTop: 10, fontSize: 11, color: P.chromeMuted }}>
+          ✓ Isso também marca os trackers {pad3(de)}–{pad3(ate)} do SDM {subKey} como <b>Liberado</b> na camada de Acesso trator.
+        </div>
+      )}
     </div>
   );
 }
 
-function HistBulkImport({ onSubmitEntry }) {
+function HistBulkImport({ onSubmitEntry, entries }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [fase, setFase] = useState("rocagem_acabamento");
@@ -2539,7 +2605,9 @@ function HistBulkImport({ onSubmitEntry }) {
   const [done, setDone] = useState(null);
 
   const handleParse = () => {
-    setPreview(parseBulkRocagemText(text, fase));
+    const parsed = parseBulkRocagemText(text, fase);
+    const { kept, skipped: dupSkipped } = dedupeBulkEntries(parsed.entries, entries || []);
+    setPreview({ entries: kept, skipped: [...parsed.skipped, ...dupSkipped] });
     setDone(null);
   };
 
@@ -2873,14 +2941,16 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
       // (registro retroativo de ciclo passado) não mexe na camada atual.
       const currentYear = String(new Date().getFullYear());
       if (entry.fase === "rocagem_acabamento" && entry.data.slice(0, 4) === currentYear) {
-        const subData = { ...(next[entry.subKey] || {}) };
-        for (let n = entry.trackerDe; n <= entry.trackerAte; n++) {
-          const cur = getStatus({ [entry.subKey]: subData }, entry.subKey, n);
-          const updated = [...cur];
-          updated[LAYER_IDX.rocagem] = LAYER_DONE_IDX.rocagem;
-          subData[n] = updated;
-        }
-        next = { ...next, [entry.subKey]: subData };
+        next = applyLayerRangeDone(next, entry.subKey, "rocagem", entry.trackerDe, entry.trackerAte);
+      }
+
+      // Se o trator roçou aquele trecho, significa que ele tem acesso ali
+      // — marca automaticamente como "Liberado" na camada de Acesso
+      // trator. Diferente da Roçagem, acesso é um fato físico do
+      // terreno, não reseta por ciclo, então isso vale pra registro de
+      // qualquer ano (inclusive backfill de anos anteriores).
+      if (entry.fase === "rocagem_trator") {
+        next = applyLayerRangeDone(next, entry.subKey, "trator", entry.trackerDe, entry.trackerAte);
       }
 
       return next;
@@ -2898,8 +2968,8 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   if (tab === "registrar") {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", minHeight: 0, overflowY: "auto" }}>
-        <div style={{ flexShrink: 0 }}><HistRegistrarForm onSubmit={addEntry} /></div>
-        <div style={{ flexShrink: 0 }}><HistBulkImport onSubmitEntry={addEntry} /></div>
+        <div style={{ flexShrink: 0 }}><HistRegistrarForm onSubmit={addEntry} entries={entries} /></div>
+        <div style={{ flexShrink: 0 }}><HistBulkImport onSubmitEntry={addEntry} entries={entries} /></div>
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>
             ÚLTIMOS REGISTROS
@@ -3273,7 +3343,7 @@ export default function App() {
               borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontFamily: "inherit", fontWeight: 600,
               cursor: "pointer", outline: "none",
             }}>
-              {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
+              {SUB_KEYS.map((k) => <option key={k} value={k} style={{ color: "#182449", background: "#fff" }}>SDM {k}</option>)}
             </select>
           )}
         </div>
