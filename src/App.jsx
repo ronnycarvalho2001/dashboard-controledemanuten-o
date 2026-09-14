@@ -266,6 +266,25 @@ function computeDaysRanking(entries, faseKey, year = "all") {
     .map(([subKey, g]) => ({ subKey, days: g.dates.size, qty: g.qty }))
     .sort((a, b) => a.days - b.days);
 }
+// Ranking de dias da Roçagem = somatório dos dias de Trator + dias de
+// Acabamento (não união) — se um subcampo só tem um dos dois, o outro
+// entra como 0 e o total vira só o que existir.
+function computeRocagemDaysRanking(entries, year = "all") {
+  const bySub = {};
+  entries
+    .filter((e) => (e.fase === "rocagem_trator" || e.fase === "rocagem_acabamento") && (year === "all" || e.data.slice(0, 4) === year))
+    .forEach((e) => {
+      const g = bySub[e.subKey] || (bySub[e.subKey] = { tratorDates: new Set(), acabamentoDates: new Set(), qty: 0 });
+      if (e.fase === "rocagem_trator") g.tratorDates.add(e.data);
+      else { g.acabamentoDates.add(e.data); g.qty += histEntryQty(e); }
+    });
+  return Object.entries(bySub)
+    .map(([subKey, g]) => ({
+      subKey, tratorDays: g.tratorDates.size, acabamentoDays: g.acabamentoDates.size,
+      days: g.tratorDates.size + g.acabamentoDates.size, qty: g.qty,
+    }))
+    .sort((a, b) => a.days - b.days);
+}
 function computeYearCompare(entries) {
   const years = {};
   entries.forEach((e) => {
@@ -3182,7 +3201,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
 
   if (tab === "indicadores") {
     const rankingYearOptions = [...new Set(entries.map((e) => e.data.slice(0, 4)))].sort().reverse();
-    const rankingRocagem = computeDaysRanking(entries, "rocagem_acabamento", rankingYear);
+    const rankingRocagem = computeRocagemDaysRanking(entries, rankingYear);
     const rankingLavagem = computeDaysRanking(entries, "lavagem", rankingYear);
     const tratorVsAcabamento = computeTratorVsAcabamento(entries, rankingYear);
     const tratorAcabamentoDays = computeTratorAcabamentoDays(entries, rankingYear);
@@ -3209,15 +3228,15 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
               </select>
             </div>
             <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
-              Dias distintos com registro de acabamento naquele subcampo, do menor pro maior.
+              Somatório de dias de trator + dias de acabamento naquele subcampo, do menor pro maior.
               {rankingYear === "all" && " Somando todos os anos — um subcampo trabalhado em ciclos diferentes acumula os dois."}
             </div>
             {rankingRocagem.length === 0 ? (
-              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de acabamento de roçagem ainda.</div>
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de roçagem ainda.</div>
             ) : (
               <HorizBarList items={rankingRocagem} color="#2a78d6"
                 getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`}
-                getTitle={(d) => `${d.qty} trackers no total`} />
+                getTitle={(d) => `${d.tratorDays} de trator + ${d.acabamentoDays} de acabamento · ${d.qty} trackers concluídos`} />
             )}
           </div>
 
