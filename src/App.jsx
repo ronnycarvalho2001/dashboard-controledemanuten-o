@@ -205,6 +205,31 @@ const HIST_PHASES = [
 // de trackers (ranking, comparar ciclos). "Sem atividade" fica de fora
 // dessas contas, é só um registro informativo de período parado.
 const HIST_WORK_PHASES = HIST_PHASES.filter((p) => p.key !== "sem_atividade");
+// Motivos padronizados de "sem atividade" — múltipla escolha, porque um
+// mesmo dia pode ter mais de um (ex.: inspeção de módulos + amarração de
+// cabos no mesmo subcampo).
+const DOWNTIME_REASONS = [
+  { key: "chuva", label: "Chuva" },
+  { key: "raios", label: "Raios / descargas atmosféricas" },
+  { key: "amarracao_cabos", label: "Amarração de cabos" },
+  { key: "inspecao_modulos", label: "Inspeção de módulos" },
+  { key: "limpeza_valas", label: "Limpeza das valas de drenagem" },
+  { key: "paralisacao", label: "Paralisação / manutenção" },
+  { key: "feriado", label: "Feriado / recesso" },
+  { key: "outros", label: "Outros" },
+];
+function downtimeReasonLabel(key) { return DOWNTIME_REASONS.find((r) => r.key === key)?.label || key; }
+// Entradas antigas guardavam um texto livre em `motivo`; as novas guardam
+// `motivos` (array de chaves de DOWNTIME_REASONS) + `motivoDetalhe`
+// opcional. Isso lê os dois formatos igual, pra não perder histórico
+// antigo quando a UI mudou.
+function histMotivoLabel(e) {
+  if (e.motivos && e.motivos.length) {
+    const base = e.motivos.map(downtimeReasonLabel).join(", ");
+    return e.motivoDetalhe ? `${base} — ${e.motivoDetalhe}` : base;
+  }
+  return e.motivo?.trim() || "Sem motivo informado";
+}
 // Paleta validada (WCAG/CVD) pra identidade de série em "comparar ciclos" —
 // cada ano em cor própria, independente das cores semânticas de fase acima.
 const HIST_YEAR_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a"];
@@ -218,15 +243,41 @@ function histEntryQty(e) {
   return Math.max(0, (e.trackerAte ?? e.trackerDe) - e.trackerDe + 1);
 }
 function getHistoryEntries(statuses) { return statuses._history || []; }
-function computeSpeedRanking(entries, faseKey) {
+// excludedReasons: chaves de DOWNTIME_REASONS cujos dias de parada não
+// devem contar nos "dias corridos" do denominador — assim um subcampo que
+// perdeu dias por chuva/raio não sai penalizado no ranking de velocidade.
+function computeSpeedRanking(entries, faseKey, excludedReasons = []) {
   const bySub = {};
   entries.filter((e) => e.fase === faseKey).forEach((e) => {
     (bySub[e.subKey] || (bySub[e.subKey] = [])).push(e);
   });
+
+  const downtimeDaysBySub = {};
+  if (excludedReasons.length) {
+    entries.filter((e) => e.fase === "sem_atividade").forEach((e) => {
+      const tags = e.motivos && e.motivos.length ? e.motivos : [];
+      if (!tags.some((t) => excludedReasons.includes(t))) return;
+      const affectedSubs = e.subKey === "todos" ? SUB_KEYS : [e.subKey];
+      for (let d = new Date(e.data), end = new Date(e.dataFim || e.data); d <= end; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().slice(0, 10);
+        affectedSubs.forEach((sk) => (downtimeDaysBySub[sk] || (downtimeDaysBySub[sk] = new Set())).add(iso));
+      }
+    });
+  }
+
   return Object.entries(bySub).map(([subKey, list]) => {
     const qty = list.reduce((s, e) => s + histEntryQty(e), 0);
     const dates = list.map((e) => e.data).sort();
-    const days = Math.max(1, Math.round((new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000) + 1);
+    const first = new Date(dates[0]), last = new Date(dates[dates.length - 1]);
+    const totalDays = Math.max(1, Math.round((last - first) / 86400000) + 1);
+    const excludedSet = downtimeDaysBySub[subKey];
+    let excludedCount = 0;
+    if (excludedSet) {
+      for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
+        if (excludedSet.has(d.toISOString().slice(0, 10))) excludedCount++;
+      }
+    }
+    const days = Math.max(1, totalDays - excludedCount);
     return { subKey, qty, days, rate: qty / days };
   }).sort((a, b) => b.rate - a.rate);
 }
@@ -268,20 +319,49 @@ function computeDowntimeByMotivo(entries) {
     const start = new Date(e.data), end = new Date(e.dataFim || e.data);
     const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
     totalDays += days;
-    const label = e.motivo?.trim() || "Sem motivo informado";
-    const key = label.toLowerCase();
-    (byMotivo[key] || (byMotivo[key] = { label, days: 0 })).days += days;
+    // Um dia com mais de um motivo (ex.: inspeção + amarração) conta pra
+    // cada categoria marcada, não só a primeira.
+    const tags = e.motivos && e.motivos.length ? e.motivos.map((k) => ({ key: k, label: downtimeReasonLabel(k) }))
+      : [{ key: (e.motivo?.trim() || "sem motivo informado").toLowerCase(), label: e.motivo?.trim() || "Sem motivo informado" }];
+    tags.forEach(({ key, label }) => {
+      (byMotivo[key] || (byMotivo[key] = { label, days: 0 })).days += days;
+    });
   });
   return { totalDays, list: Object.values(byMotivo).sort((a, b) => b.days - a.days) };
 }
-// Importação em lote — cola linhas de planilha (Dia / Dia da semana /
-// Subcampo / Tracker inicial / Tracker final / Trackers / Obs) e vira uma
-// lista de registros prontos pra empurrar um a um pro mesmo addEntry do
-// formulário normal (mesma lógica, inclusive o auto-preenchimento de
-// Roçagem). Intervalos partidos anotados na coluna Obs (ex.: "61-65 +
-// 73-80") são detectados e viram registros separados; linhas sem trecho
-// de tracker identificável (nº "0-0", linha em branco, etc.) são
-// ignoradas e listadas pra revisão manual, nunca "chutadas".
+const BULK_WEEKDAY_RE = /\b(Segunda|Ter[çc]a|Quarta|Quinta|Sexta|S[áa]bado|Domingo)-?Feira?\b/gi;
+function classifyDowntimeMotivos(text) {
+  const t = text.toUpperCase();
+  const tags = [];
+  if (/CHUVA/.test(t)) tags.push("chuva");
+  if (/RAIO|DESCARGA/.test(t)) tags.push("raios");
+  if (/AMARRA/.test(t)) tags.push("amarracao_cabos");
+  if (/INSPE/.test(t)) tags.push("inspecao_modulos");
+  if (/LIMPEZA|VALA/.test(t)) tags.push("limpeza_valas");
+  if (/FERIADO|RECESSO/.test(t)) tags.push("feriado");
+  if (/PARALISA|MANUTEN|TROCA DE/.test(t)) tags.push("paralisacao");
+  if (tags.length === 0) tags.push("outros");
+  return tags;
+}
+// Importação em lote — cola linhas de planilha (formato livre: qualquer
+// ordem/qtd de colunas, desde que tenha data, subcampo e opcionalmente um
+// trecho de tracker) e vira uma lista de registros prontos pra empurrar
+// um a um pro mesmo addEntry do formulário normal (mesma lógica, inclusive
+// o auto-preenchimento de Roçagem). Em vez de depender de posição de
+// coluna (frágil — célula em branco no meio da linha desalinha tudo),
+// procura data/subcampo/intervalo em qualquer lugar da linha via regex:
+//  - intervalo "N-N" ou "do N ao N"/"e N ao N" (cobre variações tipo
+//    "61-65 + 73-80" e "FEITO DO 1 AO 17 E 25 AO 29") viram registros
+//    separados;
+//  - sem intervalo nenhum, mas com subcampo E texto (ex. "FERIADO",
+//    "AMARRAÇÃO DE CABOS"), vira registro de "sem atividade" com o motivo
+//    inferido por palavra-chave — nunca fica de fora só por não ter
+//    trecho de tracker;
+//  - sem subcampo nenhum citado, vira "sem atividade" pra usina toda
+//    ("todos");
+//  - mais de um subcampo citado E sem trecho pra ancorar qual deles é o
+//    principal fica ambíguo demais pra adivinhar — só nesse caso a linha
+//    é ignorada e listada pra revisão manual.
 function parseBulkRocagemText(rawText, fase) {
   const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const entries = [];
@@ -291,45 +371,69 @@ function parseBulkRocagemText(rawText, fase) {
   for (const line of lines) {
     if (/^dia\b/i.test(line) && /subcampo/i.test(line)) continue; // cabeçalho colado junto
 
-    let cols = line.split("\t");
-    if (cols.length < 3) cols = line.split(/ {2,}/);
-    cols = cols.map((c) => c.trim());
-
-    const [dataRaw, , subKeyRaw, deRaw, ateRaw] = cols;
-    const subKey = (subKeyRaw || "").trim();
-
-    const dm = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((dataRaw || "").trim());
+    const dm = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(line);
     if (!dm) { skipped.push({ sourceLine: line, reason: "Data inválida ou ausente" }); continue; }
     const iso = `${dm[3]}-${dm[2].padStart(2, "0")}-${dm[1].padStart(2, "0")}`;
 
-    if (!subKeySet.has(subKey)) { skipped.push({ sourceLine: line, reason: `Subcampo "${subKey || "—"}" não reconhecido` }); continue; }
+    const subMatches = [...new Set(line.match(/\b[34]\.[1-8]\b/g) || [])];
+    const subKey = subMatches[0] || null;
+    if (subKey && !subKeySet.has(subKey)) { skipped.push({ sourceLine: line, reason: `Subcampo "${subKey}" não reconhecido` }); continue; }
 
-    // Procura intervalos "N-N" em tudo que vem depois do subcampo (tracker
-    // inicial/final/qtd/obs juntos), não só numa coluna "obs" isolada —
-    // assim não depende de colunas em branco terem ficado alinhadas
-    // certinho no recorte (célula vazia no meio da linha some no split por
-    // espaço, empurrando as colunas seguintes).
-    const tail = cols.slice(3).join(" ");
-    const obs = tail;
-    const obsRanges = [...tail.matchAll(/(\d+)\s*-\s*(\d+)/g)].map((m) => [+m[1], +m[2]]);
-    let ranges = [];
-    if (obsRanges.length >= 2) {
-      ranges = obsRanges;
-    } else {
-      const de = parseInt(deRaw, 10), ate = parseInt(ateRaw, 10);
-      if (Number.isFinite(de) && Number.isFinite(ate) && de > 0 && ate >= de) {
-        ranges = [[de, ate]];
-      } else if (obsRanges.length === 1) {
-        ranges = obsRanges;
-      }
+    const afterDate = line.slice(dm.index + dm[0].length);
+    let rest = afterDate.replace(BULK_WEEKDAY_RE, " ").replace(/\bW\d{1,2}\b/g, " ");
+    if (subKey) {
+      const idx = rest.indexOf(subKey);
+      if (idx >= 0) rest = rest.slice(idx + subKey.length);
     }
 
+    const dashRanges = [...rest.matchAll(/(\d+)\s*-\s*(\d+)/g)]
+      .map((m) => [+m[1], +m[2]]).filter(([a, b]) => b >= a && b <= 132);
+    // Só conta "N AO M" quando ancorado em "do"/"e" logo antes (frases
+    // como "FEITO DO 1 AO 17 E 25 AO 29") — sem essa âncora, um número
+    // solto seguido de "ao" em outra frase (ex.: "COMPACTADO 1 AO 12",
+    // que é só uma nota sobre uma sub-parte, não um intervalo concluído)
+    // não deve virar registro.
+    const doRanges = [...rest.matchAll(/\b(?:do|e)\s+(\d+)\s+ao\s+(\d+)\b/gi)]
+      .map((m) => [+m[1], +m[2]]).filter(([a, b]) => b >= a && b <= 132);
+    let ranges = [...dashRanges, ...doRanges];
+
     if (ranges.length === 0) {
-      skipped.push({ sourceLine: line, reason: obs ? `Sem trecho de tracker claro (obs: "${obs}")` : "Sem trecho de tracker informado" });
+      // Tira menções a código de subcampo (ex. "3.6 3.7" numa nota) antes
+      // de procurar números soltos — senão "3.6"/"3.7" truncam pra "3"
+      // via parseInt e viram um intervalo fantasma tipo "3-3".
+      const numsSource = rest.replace(/\b[34]\.[1-8]\b/g, " ");
+      const nums = (numsSource.match(/\d+(?:[.,]\d+)?%?/g) || [])
+        .filter((tok) => !/%$/.test(tok))
+        .map((tok) => parseInt(tok, 10))
+        .filter((n) => Number.isFinite(n) && n >= 1 && n <= 132);
+      if (nums.length >= 2 && nums[1] >= nums[0]) ranges = [[nums[0], nums[1]]];
+    }
+
+    if (ranges.length > 0 && subKey) {
+      ranges.forEach(([de, ate]) => entries.push({ subKey, fase, trackerDe: de, trackerAte: ate, data: iso }));
       continue;
     }
 
-    ranges.forEach(([de, ate]) => entries.push({ subKey, fase, trackerDe: de, trackerAte: ate, data: iso }));
+    if (subMatches.length > 1) {
+      skipped.push({ sourceLine: line, reason: `Mais de um subcampo citado, sem trecho de tracker pra decidir (${subMatches.join(", ")}) — divida manualmente` });
+      continue;
+    }
+
+    const cleaned = rest
+      .replace(/\d+([.,]\d+)?%/g, " ")
+      .replace(/(^|\s)-+(\s|$)/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!cleaned) {
+      skipped.push({ sourceLine: line, reason: "Sem trecho de tracker nem observação — nada pra importar" });
+      continue;
+    }
+
+    entries.push({
+      subKey: subKey || "todos", fase: "sem_atividade", data: iso, dataFim: iso,
+      motivos: classifyDowntimeMotivos(cleaned), motivoDetalhe: cleaned.slice(0, 200),
+    });
   }
 
   return { entries, skipped };
@@ -2260,8 +2364,8 @@ function HistEntryRow({ e, onDelete, readOnly }) {
         background: p.color + "1e", border: `1px solid ${p.color}55`, color: p.color, fontSize: 10.5, fontWeight: 700, flexShrink: 0,
       }}>{p.label}</span>
       {noActivity ? (
-        <span style={{ color: P.chromeMuted, fontSize: 11.5, fontStyle: e.motivo ? "normal" : "italic" }}>
-          {e.motivo || "Sem motivo informado"}
+        <span style={{ color: P.chromeMuted, fontSize: 11.5 }}>
+          {histMotivoLabel(e)}
         </span>
       ) : (
         <span style={{ color: P.chromeText, fontFamily: "monospace", fontSize: 11.5 }}>
@@ -2285,8 +2389,10 @@ function HistRegistrarForm({ onSubmit }) {
   const [ate, setAte] = useState(132);
   const [data, setData] = useState(() => new Date().toISOString().slice(0, 10));
   const [dataFim, setDataFim] = useState("");
-  const [motivo, setMotivo] = useState("");
+  const [motivos, setMotivos] = useState([]);
+  const [motivoDetalhe, setMotivoDetalhe] = useState("");
   const noActivity = fase === "sem_atividade";
+  const toggleMotivo = (key) => setMotivos((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
   const valid = noActivity ? !!data && (!dataFim || dataFim >= data) : !!data && ate >= de;
   return (
     <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
@@ -2307,11 +2413,6 @@ function HistRegistrarForm({ onSubmit }) {
         </label>
         {noActivity ? (
           <>
-            <label style={histFieldWrap}>
-              <span style={histFieldLabel}>Motivo</span>
-              <input type="text" placeholder="Chuva, feriado, manutenção…" value={motivo} onChange={(e) => setMotivo(e.target.value)}
-                style={{ ...histFieldInput, width: 200 }} />
-            </label>
             <label style={histFieldWrap}>
               <span style={histFieldLabel}>De</span>
               <input type="date" value={data} onChange={(e) => setData(e.target.value)} style={histFieldInput} />
@@ -2337,20 +2438,38 @@ function HistRegistrarForm({ onSubmit }) {
             </label>
           </>
         )}
-        <button disabled={!valid} onClick={() => {
-          if (!valid) return;
-          if (noActivity) {
-            onSubmit({ subKey: subKey || "todos", fase, data, dataFim: dataFim || data, motivo: motivo.trim() });
-            setMotivo(""); setDataFim("");
-          } else {
-            onSubmit({ subKey, fase, trackerDe: de, trackerAte: ate, data });
-          }
-        }} style={{
-          background: valid ? P.blue : P.chromeBorder, border: "none", color: valid ? "#fff" : P.chromeMuted,
-          borderRadius: 8, padding: "8px 18px", fontSize: 12.5, fontWeight: 700,
-          cursor: valid ? "pointer" : "default", fontFamily: "inherit",
-        }}>Registrar</button>
       </div>
+
+      {noActivity && (
+        <div style={{ marginTop: 12 }}>
+          <span style={histFieldLabel}>Motivo (pode marcar mais de um)</span>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 6, marginBottom: 8 }}>
+            {DOWNTIME_REASONS.map((r) => (
+              <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: P.chromeText, cursor: "pointer" }}>
+                <input type="checkbox" checked={motivos.includes(r.key)} onChange={() => toggleMotivo(r.key)} />
+                {r.label}
+              </label>
+            ))}
+          </div>
+          <input type="text" placeholder="Detalhe (opcional)" value={motivoDetalhe} onChange={(e) => setMotivoDetalhe(e.target.value)}
+            style={{ ...histFieldInput, width: "100%", maxWidth: 360 }} />
+        </div>
+      )}
+
+      <button disabled={!valid} onClick={() => {
+        if (!valid) return;
+        if (noActivity) {
+          onSubmit({ subKey: subKey || "todos", fase, data, dataFim: dataFim || data, motivos, motivoDetalhe: motivoDetalhe.trim() });
+          setMotivos([]); setMotivoDetalhe(""); setDataFim("");
+        } else {
+          onSubmit({ subKey, fase, trackerDe: de, trackerAte: ate, data });
+        }
+      }} style={{
+        marginTop: 12,
+        background: valid ? P.blue : P.chromeBorder, border: "none", color: valid ? "#fff" : P.chromeMuted,
+        borderRadius: 8, padding: "8px 18px", fontSize: 12.5, fontWeight: 700,
+        cursor: valid ? "pointer" : "default", fontFamily: "inherit",
+      }}>Registrar</button>
       {fase === "rocagem_acabamento" && data.slice(0, 4) === String(new Date().getFullYear()) && (
         <div style={{ marginTop: 10, fontSize: 11, color: P.chromeMuted }}>
           ✓ Isso também marca os trackers {pad3(de)}–{pad3(ate)} do SDM {subKey} como <b>Concluída</b> na camada de Roçagem.
@@ -2425,10 +2544,14 @@ function HistBulkImport({ onSubmitEntry }) {
                   <div style={{ fontSize: 11, color: P.chromeMuted, marginBottom: 6 }}>
                     {preview.entries.length} registro(s) prontos pra importar:
                   </div>
-                  <div style={{ maxHeight: 200, overflowY: "auto", border: `1px solid ${P.chromeBorder}`, borderRadius: 8 }}>
+                  <div style={{ maxHeight: 220, overflowY: "auto", border: `1px solid ${P.chromeBorder}`, borderRadius: 8 }}>
                     {preview.entries.map((e, i) => (
                       <div key={i} style={{ padding: "5px 10px", fontSize: 11, fontFamily: "monospace", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeText }}>
-                        {e.data} · SDM {e.subKey} · Tracker {pad3(e.trackerDe)}–{pad3(e.trackerAte)}
+                        {e.fase === "sem_atividade" ? (
+                          <>{e.data} · {e.subKey === "todos" ? "Todos" : `SDM ${e.subKey}`} · <span style={{ color: P.warn }}>sem atividade</span> ({e.motivos.map(downtimeReasonLabel).join(", ")}){e.motivoDetalhe ? ` — ${e.motivoDetalhe}` : ""}</>
+                        ) : (
+                          <>{e.data} · SDM {e.subKey} · Tracker {pad3(e.trackerDe)}–{pad3(e.trackerAte)}</>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -2599,6 +2722,11 @@ function YearCompareChart({ yearKeys, years }) {
 function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   const entries = useMemo(() => getHistoryEntries(statuses), [statuses]);
   const sortedEntries = useMemo(() => [...entries].sort((a, b) => b.data.localeCompare(a.data)), [entries]);
+  // Filtro "ignorar dias parados por X" nos indicadores — fica aqui em
+  // cima (não dentro do bloco da aba) porque hooks não podem ser
+  // condicionais, mesmo a aba "indicadores" sendo só um dos vários
+  // retornos deste componente.
+  const [excludedReasons, setExcludedReasons] = useState([]);
 
   const addEntry = useCallback((entry) => {
     setStatuses((prev) => {
@@ -2656,12 +2784,13 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   }
 
   if (tab === "indicadores") {
-    const rankingRocagem = computeSpeedRanking(entries, "rocagem_acabamento");
-    const rankingLavagem = computeSpeedRanking(entries, "lavagem");
+    const rankingRocagem = computeSpeedRanking(entries, "rocagem_acabamento", excludedReasons);
+    const rankingLavagem = computeSpeedRanking(entries, "lavagem", excludedReasons);
     const tratorVsAcabamento = computeTratorVsAcabamento(entries);
     const downtime = computeDowntimeByMotivo(entries);
     const progRocagem = computeLiveProgress(statuses, "rocagem");
     const progLavagem = computeLiveProgress(statuses, "lavagem");
+    const toggleExcluded = (key) => setExcludedReasons((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -2671,11 +2800,26 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           <StatTile label="Dias sem atividade" value={downtime.totalDays} />
         </div>
 
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: "12px 16px" }}>
+          <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 8 }}>
+            IGNORAR DIAS PARADOS POR (não conta contra o ranking de velocidade)
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {DOWNTIME_REASONS.map((r) => (
+              <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: P.chromeText, cursor: "pointer" }}>
+                <input type="checkbox" checked={excludedReasons.includes(r.key)} onChange={() => toggleExcluded(r.key)} />
+                {r.label}
+              </label>
+            ))}
+          </div>
+        </div>
+
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
             <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de velocidade — Roçagem</div>
             <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
               Trackers com acabamento concluído por dia corrido, do mais rápido ao mais lento.
+              {excludedReasons.length > 0 && " Dias parados marcados acima não contam no total de dias."}
             </div>
             {rankingRocagem.length === 0 ? (
               <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de acabamento de roçagem ainda.</div>
