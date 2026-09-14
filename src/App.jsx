@@ -358,6 +358,21 @@ function computeTratorVsAcabamento(entries, year = "all") {
     .map(([subKey, v]) => ({ subKey, ...v, gap: v.trator - v.acabamento }))
     .sort((a, b) => b.gap - a.gap);
 }
+// Dias (não trackers) que o trator trabalhou, que o acabamento trabalhou,
+// e o total de dias distintos entre os dois, por subcampo.
+function computeTratorAcabamentoDays(entries, year = "all") {
+  const bySub = {};
+  entries.forEach((e) => {
+    if (e.fase !== "rocagem_trator" && e.fase !== "rocagem_acabamento") return;
+    if (year !== "all" && e.data.slice(0, 4) !== year) return;
+    const g = bySub[e.subKey] || (bySub[e.subKey] = { tratorDates: new Set(), acabamentoDates: new Set() });
+    (e.fase === "rocagem_trator" ? g.tratorDates : g.acabamentoDates).add(e.data);
+  });
+  return Object.entries(bySub).map(([subKey, g]) => {
+    const totalDates = new Set([...g.tratorDates, ...g.acabamentoDates]);
+    return { subKey, tratorDays: g.tratorDates.size, acabamentoDays: g.acabamentoDates.size, totalDays: totalDates.size };
+  }).sort((a, b) => b.totalDays - a.totalDays);
+}
 function computeDowntimeByMotivo(entries, year = "all") {
   const byMotivo = {};
   let totalDays = 0;
@@ -2710,7 +2725,7 @@ function HistBulkImport({ onSubmitEntry, entries }) {
   );
 }
 
-const CALENDAR_WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+const CALENDAR_WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const calNavBtnStyle = {
   width: 28, height: 28, borderRadius: 7, border: `1px solid ${P.chromeBorder}`, background: P.page,
   color: P.chromeText, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
@@ -2751,7 +2766,7 @@ function HistCalendarTab({ entries }) {
   const [y, m] = monthCursor.split("-").map(Number);
   const firstOfMonth = new Date(y, m - 1, 1);
   const daysInMonth = new Date(y, m, 0).getDate();
-  const startWeekday = (firstOfMonth.getDay() + 6) % 7; // 0 = segunda
+  const startWeekday = firstOfMonth.getDay(); // 0 = domingo
   const cells = [];
   for (let i = 0; i < startWeekday; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
@@ -2805,16 +2820,22 @@ function HistCalendarTab({ entries }) {
                   : "Sem atividade registrada esse dia";
                 return (
                   <div key={i} title={title} style={{
-                    minHeight: 46, borderRadius: 6, border: `1px solid ${P.chromeBorder}`,
-                    background: fasesHere.length ? P.chromeCard : P.page,
-                    display: "flex", flexDirection: "column", overflow: "hidden",
+                    minHeight: 50, borderRadius: 6, border: `1px solid ${P.chromeBorder}`,
+                    background: P.page, position: "relative", overflow: "hidden",
+                    display: "flex", flexDirection: "column",
                   }}>
-                    <div style={{ fontSize: 10, color: P.chromeMuted, fontFamily: "monospace", padding: "2px 4px" }}>{d}</div>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
-                      {fasesHere.map((f) => (
-                        <div key={f} style={{ flex: 1, background: histPhase(f).color + "99" }} />
-                      ))}
-                    </div>
+                    {fasesHere.length > 0 && (
+                      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                        {fasesHere.map((f) => (
+                          <div key={f} style={{ flex: 1, background: histPhase(f).color }} />
+                        ))}
+                      </div>
+                    )}
+                    <span style={{
+                      position: "absolute", top: 3, left: 4, fontSize: 10.5, fontWeight: 700, fontFamily: "monospace",
+                      color: fasesHere.length ? "#fff" : P.chromeMuted,
+                      textShadow: fasesHere.length ? "0 1px 2px rgba(0,0,0,0.6)" : "none",
+                    }}>{d}</span>
                   </div>
                 );
               })}
@@ -3004,6 +3025,44 @@ function TratorAcabamentoChart({ data }) {
   );
 }
 
+const TRATOR_ACABAMENTO_DAY_COLS = [
+  { key: "tratorDays", label: "Dias de trator", color: P.warn },
+  { key: "acabamentoDays", label: "Dias de acabamento", color: P.done },
+  { key: "totalDays", label: "Dias total", color: P.blue },
+];
+function TratorAcabamentoDaysTable({ data, cols }) {
+  const activeCols = TRATOR_ACABAMENTO_DAY_COLS.filter((c) => cols.includes(c.key));
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 11.5 }}>
+        <thead>
+          <tr>
+            <th style={cmpThStyle}>Subcampo</th>
+            {activeCols.map((c) => (
+              <th key={c.key} style={{ ...cmpThStyle, borderLeft: `2px solid ${P.chromeBorder}`, textAlign: "center" }}>{c.label}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.map((d) => (
+            <tr key={d.subKey}>
+              <td style={{ ...cmpTdStyle, fontWeight: 700, color: P.chromeText, fontFamily: "monospace" }}>SDM {d.subKey}</td>
+              {activeCols.map((c) => (
+                <td key={c.key} style={{
+                  ...cmpTdStyle, borderLeft: `2px solid ${P.chromeBorder}`, textAlign: "center",
+                  fontFamily: "monospace", fontWeight: 700, color: c.color,
+                }}>
+                  {d[c.key]} dia(s)
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function YearCompareChart({ yearKeys, years }) {
   const max = Math.max(1, ...yearKeys.flatMap((y) => HIST_WORK_PHASES.map((p) => years[y]?.[p.key] || 0)));
   return (
@@ -3059,6 +3118,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   );
   const [compareFase, setCompareFase] = useState("rocagem_acabamento");
   const [rankingYear, setRankingYear] = useState(String(new Date().getFullYear()));
+  const [tratorDaysCols, setTratorDaysCols] = useState(["tratorDays", "acabamentoDays", "totalDays"]);
 
   const addEntry = useCallback((entry) => {
     setStatuses((prev) => {
@@ -3122,7 +3182,9 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
     const rankingRocagem = computeDaysRanking(entries, "rocagem_acabamento", rankingYear);
     const rankingLavagem = computeDaysRanking(entries, "lavagem", rankingYear);
     const tratorVsAcabamento = computeTratorVsAcabamento(entries, rankingYear);
+    const tratorAcabamentoDays = computeTratorAcabamentoDays(entries, rankingYear);
     const downtime = computeDowntimeByMotivo(entries, rankingYear);
+    const toggleTratorDaysCol = (key) => setTratorDaysCols((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
     const progRocagem = computeLiveProgress(statuses, "rocagem");
     const progLavagem = computeLiveProgress(statuses, "lavagem");
     return (
@@ -3180,6 +3242,28 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           {tratorVsAcabamento.length === 0 ? (
             <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de roçagem ainda.</div>
           ) : <TratorAcabamentoChart data={tratorVsAcabamento} />}
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: `1px solid ${P.chromeBorder}` }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+              <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700 }}>Dias de trabalho por subcampo</div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                {TRATOR_ACABAMENTO_DAY_COLS.map((c) => (
+                  <label key={c.key} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: P.chromeText, cursor: "pointer" }}>
+                    <input type="checkbox" checked={tratorDaysCols.includes(c.key)} onChange={() => toggleTratorDaysCol(c.key)} />
+                    {c.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+              Quantos dias distintos o trator trabalhou naquele subcampo, quantos dias o acabamento trabalhou, e o total de dias entre os dois (sem contar duas vezes um dia em que ambos passaram).
+            </div>
+            {tratorAcabamentoDays.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de roçagem ainda.</div>
+            ) : tratorDaysCols.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Marque ao menos uma coluna acima pra ver a tabela.</div>
+            ) : <TratorAcabamentoDaysTable data={tratorAcabamentoDays} cols={tratorDaysCols} />}
+          </div>
         </div>
 
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
