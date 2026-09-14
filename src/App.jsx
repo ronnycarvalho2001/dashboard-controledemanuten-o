@@ -2903,11 +2903,9 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>
             ÚLTIMOS REGISTROS
           </div>
-          <div style={{ maxHeight: 420, overflowY: "auto" }}>
-            {sortedEntries.length === 0 ? (
-              <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro ainda.</div>
-            ) : sortedEntries.slice(0, 12).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
-          </div>
+          {sortedEntries.length === 0 ? (
+            <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro ainda.</div>
+          ) : sortedEntries.slice(0, 5).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
         </div>
       </div>
     );
