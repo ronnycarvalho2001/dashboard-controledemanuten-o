@@ -291,6 +291,61 @@ function computeYearCompare(entries) {
   const yearKeys = Object.keys(years).sort().slice(-3);
   return { yearKeys, years };
 }
+// Lavagem não segue o calendário — um ciclo pode começar num ano e
+// terminar no seguinte. Detecta "ciclos" como sequências de registros de
+// lavagem sem gap grande entre eles (>90 dias corridos = ciclo novo) e
+// rotula pelo(s) ano(s) que o ciclo atravessa ("2025" ou "2025/2026").
+// Roçagem continua agrupada por ano-calendário simples.
+function computeLavagemCycles(entries) {
+  const dates = [...new Set(entries.filter((e) => e.fase === "lavagem").map((e) => e.data))].sort();
+  const cycles = [];
+  dates.forEach((d) => {
+    const last = cycles[cycles.length - 1];
+    if (last && (new Date(d) - new Date(last.end)) / 86400000 <= 90) {
+      if (d > last.end) last.end = d;
+    } else {
+      cycles.push({ start: d, end: d });
+    }
+  });
+  return cycles.map((c) => {
+    const sy = c.start.slice(0, 4), ey = c.end.slice(0, 4);
+    return { ...c, label: sy === ey ? sy : `${sy}/${ey}` };
+  });
+}
+function periodLabelForDate(cycles, date) {
+  const c = cycles.find((c) => date >= c.start && date <= c.end);
+  return c ? c.label : date.slice(0, 4);
+}
+// Detalhe por subcampo × ano (ou ciclo, pra lavagem) × fase — trackers
+// concluídos, dias corridos e velocidade, pra comparar o mesmo subcampo
+// entre ciclos diferentes.
+function computeSubcampoYearDetail(entries, faseKey) {
+  const lavagemCycles = faseKey === "lavagem" ? computeLavagemCycles(entries) : null;
+  const groups = {};
+  entries.filter((e) => e.fase === faseKey).forEach((e) => {
+    const year = lavagemCycles ? periodLabelForDate(lavagemCycles, e.data) : e.data.slice(0, 4);
+    const key = `${e.subKey}|${year}`;
+    (groups[key] || (groups[key] = { subKey: e.subKey, year, list: [] })).list.push(e);
+  });
+  const rows = Object.values(groups).map((g) => {
+    const qty = g.list.reduce((s, e) => s + histEntryQty(e), 0);
+    const dates = g.list.map((e) => e.data).sort();
+    const first = dates[0], last = dates[dates.length - 1];
+    const days = Math.max(1, Math.round((new Date(last) - new Date(first)) / 86400000) + 1);
+    const total = PLANT[g.subKey] ? PLANT[g.subKey].t.length : 132;
+    return {
+      subKey: g.subKey, year: g.year, qty, days, rate: qty / days,
+      count: g.list.length, firstDate: first, lastDate: last, pct: total ? qty / total : 0,
+    };
+  });
+  const yearKeys = [...new Set(rows.map((r) => r.year))].sort().slice(-3);
+  const bySub = {};
+  rows.filter((r) => yearKeys.includes(r.year)).forEach((r) => {
+    (bySub[r.subKey] || (bySub[r.subKey] = {}))[r.year] = r;
+  });
+  const subKeys = Object.keys(bySub).sort();
+  return { yearKeys, subKeys, bySub };
+}
 // Progresso "de verdade" da usina inteira, direto do grid de status atual
 // (não do log) — o log pode ter sobreposição entre registros, o grid não.
 function computeLiveProgress(statuses, layerKey) {
@@ -2590,13 +2645,28 @@ function HistBulkImport({ onSubmitEntry }) {
 function HistTimelineTab({ entries, onDelete, readOnly }) {
   const [subFilter, setSubFilter] = useState("all");
   const [faseFilter, setFaseFilter] = useState("all");
+  const [yearFilter, setYearFilter] = useState("all");
+  const yearOptions = [...new Set(entries.map((e) => e.data.slice(0, 4)))].sort().reverse();
   const filtered = entries.filter((e) =>
     (subFilter === "all" || e.subKey === subFilter || e.subKey === "todos") &&
-    (faseFilter === "all" || e.fase === faseFilter)
+    (faseFilter === "all" || e.fase === faseFilter) &&
+    (yearFilter === "all" || e.data.slice(0, 4) === yearFilter)
   );
+  // entries já vem ordenado por data desc — só precisa agrupar mantendo a ordem
+  const byYear = [];
+  filtered.forEach((e) => {
+    const y = e.data.slice(0, 4);
+    const last = byYear[byYear.length - 1];
+    if (last && last.year === y) last.list.push(e);
+    else byYear.push({ year: y, list: [e] });
+  });
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <select value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} style={histFieldInput}>
+          <option value="all">Todos os anos</option>
+          {yearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+        </select>
         <select value={subFilter} onChange={(e) => setSubFilter(e.target.value)} style={histFieldInput}>
           <option value="all">Todos os subcampos</option>
           {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
@@ -2606,11 +2676,24 @@ function HistTimelineTab({ entries, onDelete, readOnly }) {
           {HIST_PHASES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
         </select>
       </div>
-      <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden" }}>
-        {filtered.length === 0 ? (
-          <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro encontrado.</div>
-        ) : filtered.map((e) => <HistEntryRow key={e.id} e={e} onDelete={onDelete} readOnly={readOnly} />)}
-      </div>
+      {byYear.length === 0 ? (
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>
+          Nenhum registro encontrado.
+        </div>
+      ) : byYear.map(({ year, list }) => (
+        <div key={year}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, margin: "4px 0 6px",
+          }}>
+            <span style={{ color: P.chromeText, fontSize: 13, fontWeight: 700 }}>{year}</span>
+            <span style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace" }}>{list.length} registro(s)</span>
+            <div style={{ flex: 1, height: 1, background: P.chromeBorder }} />
+          </div>
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden" }}>
+            {list.map((e) => <HistEntryRow key={e.id} e={e} onDelete={onDelete} readOnly={readOnly} />)}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -2633,6 +2716,50 @@ function HorizBarList({ items, getLabel, getValue, getDisplay, getTitle, color =
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+const cmpThStyle = {
+  padding: "6px 10px", textAlign: "left", color: P.chromeMuted, fontSize: 10.5,
+  fontFamily: "monospace", borderBottom: `1px solid ${P.chromeBorder}`, whiteSpace: "nowrap",
+};
+const cmpTdStyle = { padding: "6px 10px", borderBottom: `1px solid ${P.chromeBorder}`, verticalAlign: "top" };
+
+function SubcampoYearTable({ yearKeys, subKeys, bySub }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 11.5 }}>
+        <thead>
+          <tr>
+            <th style={cmpThStyle}>Subcampo</th>
+            {yearKeys.map((y) => (
+              <th key={y} style={{ ...cmpThStyle, borderLeft: `2px solid ${P.chromeBorder}`, textAlign: "center" }}>{y}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {subKeys.map((sk) => (
+            <tr key={sk}>
+              <td style={{ ...cmpTdStyle, fontWeight: 700, color: P.chromeText, fontFamily: "monospace" }}>SDM {sk}</td>
+              {yearKeys.map((y) => {
+                const r = bySub[sk][y];
+                return (
+                  <td key={y} style={{ ...cmpTdStyle, borderLeft: `2px solid ${P.chromeBorder}`, minWidth: 130 }}>
+                    {r ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 1 }} title={`${r.firstDate} → ${r.lastDate} (${r.count} registro(s))`}>
+                        <span style={{ fontWeight: 700, color: P.chromeText }}>{r.qty} trackers</span>
+                        <span style={{ color: P.chromeMuted, fontFamily: "monospace", fontSize: 10.5 }}>{r.days} dia(s) · {r.rate.toFixed(1)}/dia</span>
+                        <span style={{ color: P.chromeMuted, fontFamily: "monospace", fontSize: 10.5 }}>{Math.round(r.pct * 100)}% do subcampo</span>
+                      </div>
+                    ) : <span style={{ color: P.chromeBorder }}>—</span>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -2727,6 +2854,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   // condicionais, mesmo a aba "indicadores" sendo só um dos vários
   // retornos deste componente.
   const [excludedReasons, setExcludedReasons] = useState([]);
+  const [compareFase, setCompareFase] = useState("rocagem_acabamento");
 
   const addEntry = useCallback((entry) => {
     setStatuses((prev) => {
@@ -2873,16 +3001,35 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
 
   if (tab === "comparar_ciclos") {
     const { yearKeys, years } = computeYearCompare(entries);
+    const detail = computeSubcampoYearDetail(entries, compareFase);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
-          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Comparativo entre ciclos</div>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Comparativo geral entre ciclos</div>
           <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
             Total de trackers concluídos por fase, agrupado por ano (com base na data de cada registro). Últimos 3 anos com dados.
           </div>
           {yearKeys.length === 0 ? (
             <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros suficientes pra comparar ciclos ainda.</div>
           ) : <YearCompareChart yearKeys={yearKeys} years={years} />}
+        </div>
+
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700 }}>Comparativo por subcampo</div>
+            <select value={compareFase} onChange={(e) => setCompareFase(e.target.value)} style={{ ...histFieldInput, fontSize: 11.5 }}>
+              {HIST_WORK_PHASES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+            </select>
+          </div>
+          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+            Trackers concluídos, dias corridos, velocidade e % do subcampo, um período ao lado do outro.
+            {compareFase === "lavagem"
+              ? " Lavagem é agrupada por ciclo real de trabalho (não por ano-calendário), já que um ciclo pode atravessar a virada do ano."
+              : " Agrupado por ano-calendário."}
+          </div>
+          {detail.subKeys.length === 0 ? (
+            <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros dessa fase ainda.</div>
+          ) : <SubcampoYearTable yearKeys={detail.yearKeys} subKeys={detail.subKeys} bySub={detail.bySub} />}
         </div>
       </div>
     );
