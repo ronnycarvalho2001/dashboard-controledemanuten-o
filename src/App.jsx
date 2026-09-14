@@ -243,43 +243,21 @@ function histEntryQty(e) {
   return Math.max(0, (e.trackerAte ?? e.trackerDe) - e.trackerDe + 1);
 }
 function getHistoryEntries(statuses) { return statuses._history || []; }
-// excludedReasons: chaves de DOWNTIME_REASONS cujos dias de parada não
-// devem contar nos "dias corridos" do denominador — assim um subcampo que
-// perdeu dias por chuva/raio não sai penalizado no ranking de velocidade.
-function computeSpeedRanking(entries, faseKey, excludedReasons = []) {
+// Ranking de dias por subcampo — conta quantos dias DISTINTOS tiveram
+// registro daquela fase (não o intervalo do primeiro ao último, que
+// distorce muito quando o trabalho é pontual: faz um trecho crítico,
+// vai pra outro subcampo, volta semanas depois pra terminar. Contando só
+// os dias com registro de verdade, esse vai-e-volta não infla a conta.
+function computeDaysRanking(entries, faseKey) {
   const bySub = {};
   entries.filter((e) => e.fase === faseKey).forEach((e) => {
-    (bySub[e.subKey] || (bySub[e.subKey] = [])).push(e);
+    const g = bySub[e.subKey] || (bySub[e.subKey] = { dates: new Set(), qty: 0 });
+    g.dates.add(e.data);
+    g.qty += histEntryQty(e);
   });
-
-  const downtimeDaysBySub = {};
-  if (excludedReasons.length) {
-    entries.filter((e) => e.fase === "sem_atividade").forEach((e) => {
-      const tags = e.motivos && e.motivos.length ? e.motivos : [];
-      if (!tags.some((t) => excludedReasons.includes(t))) return;
-      const affectedSubs = e.subKey === "todos" ? SUB_KEYS : [e.subKey];
-      for (let d = new Date(e.data), end = new Date(e.dataFim || e.data); d <= end; d.setDate(d.getDate() + 1)) {
-        const iso = d.toISOString().slice(0, 10);
-        affectedSubs.forEach((sk) => (downtimeDaysBySub[sk] || (downtimeDaysBySub[sk] = new Set())).add(iso));
-      }
-    });
-  }
-
-  return Object.entries(bySub).map(([subKey, list]) => {
-    const qty = list.reduce((s, e) => s + histEntryQty(e), 0);
-    const dates = list.map((e) => e.data).sort();
-    const first = new Date(dates[0]), last = new Date(dates[dates.length - 1]);
-    const totalDays = Math.max(1, Math.round((last - first) / 86400000) + 1);
-    const excludedSet = downtimeDaysBySub[subKey];
-    let excludedCount = 0;
-    if (excludedSet) {
-      for (let d = new Date(first); d <= last; d.setDate(d.getDate() + 1)) {
-        if (excludedSet.has(d.toISOString().slice(0, 10))) excludedCount++;
-      }
-    }
-    const days = Math.max(1, totalDays - excludedCount);
-    return { subKey, qty, days, rate: qty / days };
-  }).sort((a, b) => b.rate - a.rate);
+  return Object.entries(bySub)
+    .map(([subKey, g]) => ({ subKey, days: g.dates.size, qty: g.qty }))
+    .sort((a, b) => a.days - b.days);
 }
 function computeYearCompare(entries) {
   const years = {};
@@ -2849,11 +2827,6 @@ function YearCompareChart({ yearKeys, years }) {
 function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   const entries = useMemo(() => getHistoryEntries(statuses), [statuses]);
   const sortedEntries = useMemo(() => [...entries].sort((a, b) => b.data.localeCompare(a.data)), [entries]);
-  // Filtro "ignorar dias parados por X" nos indicadores — fica aqui em
-  // cima (não dentro do bloco da aba) porque hooks não podem ser
-  // condicionais, mesmo a aba "indicadores" sendo só um dos vários
-  // retornos deste componente.
-  const [excludedReasons, setExcludedReasons] = useState([]);
   const [compareFase, setCompareFase] = useState("rocagem_acabamento");
 
   const addEntry = useCallback((entry) => {
@@ -2912,13 +2885,12 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   }
 
   if (tab === "indicadores") {
-    const rankingRocagem = computeSpeedRanking(entries, "rocagem_acabamento", excludedReasons);
-    const rankingLavagem = computeSpeedRanking(entries, "lavagem", excludedReasons);
+    const rankingRocagem = computeDaysRanking(entries, "rocagem_acabamento");
+    const rankingLavagem = computeDaysRanking(entries, "lavagem");
     const tratorVsAcabamento = computeTratorVsAcabamento(entries);
     const downtime = computeDowntimeByMotivo(entries);
     const progRocagem = computeLiveProgress(statuses, "rocagem");
     const progLavagem = computeLiveProgress(statuses, "lavagem");
-    const toggleExcluded = (key) => setExcludedReasons((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
@@ -2928,47 +2900,32 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           <StatTile label="Dias sem atividade" value={downtime.totalDays} />
         </div>
 
-        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: "12px 16px" }}>
-          <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 8 }}>
-            IGNORAR DIAS PARADOS POR (não conta contra o ranking de velocidade)
-          </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            {DOWNTIME_REASONS.map((r) => (
-              <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: P.chromeText, cursor: "pointer" }}>
-                <input type="checkbox" checked={excludedReasons.includes(r.key)} onChange={() => toggleExcluded(r.key)} />
-                {r.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
-            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de velocidade — Roçagem</div>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de dias — Roçagem</div>
             <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
-              Trackers com acabamento concluído por dia corrido, do mais rápido ao mais lento.
-              {excludedReasons.length > 0 && " Dias parados marcados acima não contam no total de dias."}
+              Dias distintos com registro de acabamento naquele subcampo, do menor pro maior.
             </div>
             {rankingRocagem.length === 0 ? (
               <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de acabamento de roçagem ainda.</div>
             ) : (
               <HorizBarList items={rankingRocagem} color="#2a78d6"
-                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.rate} getDisplay={(d) => `${d.rate.toFixed(1)}/dia`}
-                getTitle={(d) => `${d.qty} trackers em ${d.days} dia(s)`} />
+                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`}
+                getTitle={(d) => `${d.qty} trackers no total`} />
             )}
           </div>
 
           <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
-            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de velocidade — Lavagem</div>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de dias — Lavagem</div>
             <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
-              Trackers lavados registrados por dia corrido, do mais rápido ao mais lento.
+              Dias distintos com registro de lavagem naquele subcampo, do menor pro maior.
             </div>
             {rankingLavagem.length === 0 ? (
               <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de lavagem ainda.</div>
             ) : (
               <HorizBarList items={rankingLavagem} color="#1baf7a"
-                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.rate} getDisplay={(d) => `${d.rate.toFixed(1)}/dia`}
-                getTitle={(d) => `${d.qty} trackers em ${d.days} dia(s)`} />
+                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`}
+                getTitle={(d) => `${d.qty} trackers no total`} />
             )}
           </div>
         </div>
