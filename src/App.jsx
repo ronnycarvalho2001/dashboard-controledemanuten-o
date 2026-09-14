@@ -2436,6 +2436,7 @@ function HistRegistrarForm({ onSubmit }) {
   const [dataFim, setDataFim] = useState("");
   const [motivos, setMotivos] = useState([]);
   const [motivoDetalhe, setMotivoDetalhe] = useState("");
+  const [savedMsg, setSavedMsg] = useState(false);
   const noActivity = fase === "sem_atividade";
   const toggleMotivo = (key) => setMotivos((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
   const valid = noActivity ? !!data && (!dataFim || dataFim >= data) : !!data && ate >= de;
@@ -2501,20 +2502,26 @@ function HistRegistrarForm({ onSubmit }) {
         </div>
       )}
 
-      <button disabled={!valid} onClick={() => {
-        if (!valid) return;
-        if (noActivity) {
-          onSubmit({ subKey: subKey || "todos", fase, data, dataFim: dataFim || data, motivos, motivoDetalhe: motivoDetalhe.trim() });
-          setMotivos([]); setMotivoDetalhe(""); setDataFim("");
-        } else {
-          onSubmit({ subKey, fase, trackerDe: de, trackerAte: ate, data });
-        }
-      }} style={{
-        marginTop: 12,
-        background: valid ? P.blue : P.chromeBorder, border: "none", color: valid ? "#fff" : P.chromeMuted,
-        borderRadius: 8, padding: "8px 18px", fontSize: 12.5, fontWeight: 700,
-        cursor: valid ? "pointer" : "default", fontFamily: "inherit",
-      }}>Registrar</button>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 12 }}>
+        <button disabled={!valid} onClick={() => {
+          if (!valid) return;
+          if (noActivity) {
+            onSubmit({ subKey: subKey || "todos", fase, data, dataFim: dataFim || data, motivos, motivoDetalhe: motivoDetalhe.trim() });
+            setMotivos([]); setMotivoDetalhe(""); setDataFim("");
+          } else {
+            onSubmit({ subKey, fase, trackerDe: de, trackerAte: ate, data });
+          }
+          setSavedMsg(true);
+          setTimeout(() => setSavedMsg(false), 2500);
+        }} style={{
+          background: valid ? P.blue : P.chromeBorder, border: "none", color: valid ? "#fff" : P.chromeMuted,
+          borderRadius: 8, padding: "8px 18px", fontSize: 12.5, fontWeight: 700,
+          cursor: valid ? "pointer" : "default", fontFamily: "inherit",
+        }}>Registrar</button>
+        {savedMsg && (
+          <span style={{ color: P.done, fontSize: 12, fontWeight: 700 }}>✓ Registrado — veja em "Últimos registros" logo abaixo.</span>
+        )}
+      </div>
       {fase === "rocagem_acabamento" && data.slice(0, 4) === String(new Date().getFullYear()) && (
         <div style={{ marginTop: 10, fontSize: 11, color: P.chromeMuted }}>
           ✓ Isso também marca os trackers {pad3(de)}–{pad3(ate)} do SDM {subKey} como <b>Concluída</b> na camada de Roçagem.
