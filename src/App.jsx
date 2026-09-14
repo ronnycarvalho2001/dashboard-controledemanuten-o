@@ -340,10 +340,16 @@ function computeLiveProgress(statuses, layerKey) {
   });
   return { done, total, pct: total ? Math.round((done / total) * 100) : 0 };
 }
-function computeTratorVsAcabamento(entries) {
+// year: mesmo cuidado do ranking de dias — sem isolar por ano, um
+// subcampo trabalhado em dois ciclos soma o trator/acabamento dos dois
+// juntos, o que pode passar de 132 (o total de trackers do subcampo) e
+// dar a impressão de dado errado quando na verdade são ciclos diferentes
+// empilhados.
+function computeTratorVsAcabamento(entries, year = "all") {
   const bySub = {};
   entries.forEach((e) => {
     if (e.fase !== "rocagem_trator" && e.fase !== "rocagem_acabamento") return;
+    if (year !== "all" && e.data.slice(0, 4) !== year) return;
     const b = bySub[e.subKey] || (bySub[e.subKey] = { trator: 0, acabamento: 0 });
     b[e.fase === "rocagem_trator" ? "trator" : "acabamento"] += histEntryQty(e);
   });
@@ -351,10 +357,10 @@ function computeTratorVsAcabamento(entries) {
     .map(([subKey, v]) => ({ subKey, ...v, gap: v.trator - v.acabamento }))
     .sort((a, b) => b.gap - a.gap);
 }
-function computeDowntimeByMotivo(entries) {
+function computeDowntimeByMotivo(entries, year = "all") {
   const byMotivo = {};
   let totalDays = 0;
-  entries.filter((e) => e.fase === "sem_atividade").forEach((e) => {
+  entries.filter((e) => e.fase === "sem_atividade" && (year === "all" || e.data.slice(0, 4) === year)).forEach((e) => {
     const start = new Date(e.data), end = new Date(e.dataFim || e.data);
     const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
     totalDays += days;
@@ -2895,8 +2901,8 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
     const rankingYearOptions = [...new Set(entries.map((e) => e.data.slice(0, 4)))].sort().reverse();
     const rankingRocagem = computeDaysRanking(entries, "rocagem_acabamento", rankingYear);
     const rankingLavagem = computeDaysRanking(entries, "lavagem", rankingYear);
-    const tratorVsAcabamento = computeTratorVsAcabamento(entries);
-    const downtime = computeDowntimeByMotivo(entries);
+    const tratorVsAcabamento = computeTratorVsAcabamento(entries, rankingYear);
+    const downtime = computeDowntimeByMotivo(entries, rankingYear);
     const progRocagem = computeLiveProgress(statuses, "rocagem");
     const progLavagem = computeLiveProgress(statuses, "lavagem");
     return (
@@ -2946,9 +2952,10 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
         </div>
 
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
-          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Trator × Acabamento por subcampo</div>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Trator × Acabamento por subcampo ({rankingYear === "all" ? "todos os anos" : rankingYear})</div>
           <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
             Trackers passados pelo trator vs. com acabamento concluído — mostra onde o acabamento está atrasado em relação ao trator.
+            {rankingYear === "all" && " Somando todos os anos — se o subcampo teve mais de um ciclo, o total pode passar de 132."}
           </div>
           {tratorVsAcabamento.length === 0 ? (
             <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de roçagem ainda.</div>
@@ -2956,7 +2963,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
         </div>
 
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
-          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Paradas por motivo</div>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Paradas por motivo ({rankingYear === "all" ? "todos os anos" : rankingYear})</div>
           <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
             Total de dias sem atividade de roçagem registrados, agrupados por motivo.
           </div>
