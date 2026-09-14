@@ -315,12 +315,15 @@ function computeSubcampoYearDetail(entries, faseKey) {
   const rows = Object.values(groups).map((g) => {
     const qty = g.list.reduce((s, e) => s + histEntryQty(e), 0);
     const dates = g.list.map((e) => e.data).sort();
-    const first = dates[0], last = dates[dates.length - 1];
-    const days = Math.max(1, Math.round((new Date(last) - new Date(first)) / 86400000) + 1);
+    // Dias DISTINTOS com registro, não o intervalo do primeiro ao último
+    // — um trecho pontual seguido de retorno semanas depois não deve
+    // inflar a contagem de dias (mesmo ajuste já feito no Ranking de
+    // dias de Indicadores).
+    const days = new Set(dates).size;
     const total = PLANT[g.subKey] ? PLANT[g.subKey].t.length : 132;
     return {
       subKey: g.subKey, year: g.year, qty, days, rate: qty / days,
-      count: g.list.length, firstDate: first, lastDate: last, pct: total ? qty / total : 0,
+      count: g.list.length, firstDate: dates[0], lastDate: dates[dates.length - 1], pct: total ? qty / total : 0,
     };
   });
   const yearKeys = [...new Set(rows.map((r) => r.year))].sort().slice(-3);
@@ -3305,7 +3308,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
             </select>
           </div>
           <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
-            Trackers concluídos, dias corridos, velocidade e % do subcampo, um período ao lado do outro.
+            Trackers concluídos, dias distintos com registro, velocidade e % do subcampo, um período ao lado do outro.
             {compareFase === "lavagem"
               ? " Lavagem é agrupada por ciclo real de trabalho (não por ano-calendário), já que um ciclo pode atravessar a virada do ano."
               : " Agrupado por ano-calendário."}
