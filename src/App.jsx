@@ -384,6 +384,40 @@ function computeDowntimeByMotivo(entries) {
   });
   return { totalDays, list: Object.values(byMotivo).sort((a, b) => b.days - a.days) };
 }
+// Dias sem atividade de roçagem, por subcampo — total (pra Indicadores) e
+// quebrado por ano (pra Comparar ciclos). "todos" (parada geral da usina)
+// conta pra cada subcampo, já que ela também tirou o dia deles.
+function downtimeDaysBySubcampo(entries) {
+  const bySub = {};
+  entries.filter((e) => e.fase === "sem_atividade").forEach((e) => {
+    const start = new Date(e.data), end = new Date(e.dataFim || e.data);
+    const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+    const affected = e.subKey === "todos" ? SUB_KEYS : [e.subKey];
+    affected.forEach((sk) => { bySub[sk] = (bySub[sk] || 0) + days; });
+  });
+  return Object.entries(bySub).map(([subKey, days]) => ({ subKey, days })).sort((a, b) => b.days - a.days);
+}
+function computeSubcampoYearDowntime(entries) {
+  const bySubYear = {};
+  entries.filter((e) => e.fase === "sem_atividade").forEach((e) => {
+    const year = e.data.slice(0, 4);
+    const start = new Date(e.data), end = new Date(e.dataFim || e.data);
+    const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+    const affected = e.subKey === "todos" ? SUB_KEYS : [e.subKey];
+    affected.forEach((sk) => {
+      const key = `${sk}|${year}`;
+      (bySubYear[key] || (bySubYear[key] = { subKey: sk, year, days: 0 })).days += days;
+    });
+  });
+  const rows = Object.values(bySubYear);
+  const yearKeys = [...new Set(rows.map((r) => r.year))].sort().slice(-3);
+  const bySub = {};
+  rows.filter((r) => yearKeys.includes(r.year)).forEach((r) => {
+    (bySub[r.subKey] || (bySub[r.subKey] = {}))[r.year] = r;
+  });
+  const subKeys = Object.keys(bySub).sort();
+  return { yearKeys, subKeys, bySub };
+}
 const BULK_WEEKDAY_RE = /\b(Segunda|Ter[çc]a|Quarta|Quinta|Sexta|S[áa]bado|Domingo)-?Feira?\b/gi;
 function classifyDowntimeMotivos(text) {
   const t = text.toUpperCase();
@@ -2764,6 +2798,41 @@ function SubcampoYearTable({ yearKeys, subKeys, bySub }) {
   );
 }
 
+function SubcampoYearDowntimeTable({ yearKeys, subKeys, bySub }) {
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 11.5 }}>
+        <thead>
+          <tr>
+            <th style={cmpThStyle}>Subcampo</th>
+            {yearKeys.map((y) => (
+              <th key={y} style={{ ...cmpThStyle, borderLeft: `2px solid ${P.chromeBorder}`, textAlign: "center" }}>{y}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {subKeys.map((sk) => (
+            <tr key={sk}>
+              <td style={{ ...cmpTdStyle, fontWeight: 700, color: P.chromeText, fontFamily: "monospace" }}>SDM {sk}</td>
+              {yearKeys.map((y) => {
+                const r = bySub[sk][y];
+                return (
+                  <td key={y} style={{
+                    ...cmpTdStyle, borderLeft: `2px solid ${P.chromeBorder}`, textAlign: "center",
+                    fontFamily: "monospace", color: r ? P.warn : P.chromeBorder, fontWeight: r ? 700 : 400,
+                  }}>
+                    {r ? `${r.days} dia(s)` : "—"}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function TratorAcabamentoChart({ data }) {
   const max = Math.max(1, ...data.flatMap((d) => [d.trator, d.acabamento]));
   return (
@@ -2916,6 +2985,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
     const rankingLavagem = computeSpeedRanking(entries, "lavagem", excludedReasons);
     const tratorVsAcabamento = computeTratorVsAcabamento(entries);
     const downtime = computeDowntimeByMotivo(entries);
+    const downtimeSubcampo = downtimeDaysBySubcampo(entries);
     const progRocagem = computeLiveProgress(statuses, "rocagem");
     const progLavagem = computeLiveProgress(statuses, "lavagem");
     const toggleExcluded = (key) => setExcludedReasons((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
@@ -2983,17 +3053,32 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           ) : <TratorAcabamentoChart data={tratorVsAcabamento} />}
         </div>
 
-        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
-          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Paradas por motivo</div>
-          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
-            Total de dias sem atividade registrados, agrupados por motivo.
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Paradas por motivo</div>
+            <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+              Total de dias sem atividade de roçagem registrados, agrupados por motivo.
+            </div>
+            {downtime.list.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem paradas registradas ainda.</div>
+            ) : (
+              <HorizBarList items={downtime.list} color={P.warn}
+                getLabel={(d) => d.label} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`} />
+            )}
           </div>
-          {downtime.list.length === 0 ? (
-            <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem paradas registradas ainda.</div>
-          ) : (
-            <HorizBarList items={downtime.list} color={P.warn}
-              getLabel={(d) => d.label} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`} />
-          )}
+
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Dias sem roçagem por subcampo</div>
+            <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+              Total de dias usados em atividade que não era roçagem (amarração, inspeção, paradas etc.), por subcampo — todos os anos.
+            </div>
+            {downtimeSubcampo.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem paradas registradas ainda.</div>
+            ) : (
+              <HorizBarList items={downtimeSubcampo} color={P.warn}
+                getLabel={(d) => `SDM ${d.subKey}`} getValue={(d) => d.days} getDisplay={(d) => `${d.days} dia(s)`} />
+            )}
+          </div>
         </div>
       </div>
     );
@@ -3002,6 +3087,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   if (tab === "comparar_ciclos") {
     const { yearKeys, years } = computeYearCompare(entries);
     const detail = computeSubcampoYearDetail(entries, compareFase);
+    const downtimeDetail = computeSubcampoYearDowntime(entries);
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
         <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
@@ -3030,6 +3116,16 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           {detail.subKeys.length === 0 ? (
             <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros dessa fase ainda.</div>
           ) : <SubcampoYearTable yearKeys={detail.yearKeys} subKeys={detail.subKeys} bySub={detail.bySub} />}
+        </div>
+
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+          <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Dias sem roçagem por subcampo, por ano</div>
+          <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
+            Dias usados em atividade que não era roçagem (amarração, inspeção, limpeza de valas, paralisação etc.), por subcampo e ano-calendário.
+          </div>
+          {downtimeDetail.subKeys.length === 0 ? (
+            <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem paradas registradas ainda.</div>
+          ) : <SubcampoYearDowntimeTable yearKeys={downtimeDetail.yearKeys} subKeys={downtimeDetail.subKeys} bySub={downtimeDetail.bySub} />}
         </div>
       </div>
     );
