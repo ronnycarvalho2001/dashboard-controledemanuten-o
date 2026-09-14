@@ -525,6 +525,20 @@ function getStatus(statuses, subKey, n) {
   const arr = (statuses[subKey] && statuses[subKey][n]) || [];
   return LAYERS.map((l, i) => Math.min(arr[i] ?? 0, l.states.length - 1));
 }
+// Ciclo de Roçagem = maio de um ano até abril do ano seguinte (ex.: ciclo
+// "2026" vai de 01/05/2026 a 30/04/2027) — não é ano-calendário. Registro de
+// acabamento feito em jan-mar ainda pertence ao ciclo que começou no maio
+// anterior, não ao ciclo que só começa no maio seguinte.
+const ROCAGEM_CYCLE_START_MONTH = 5;
+function rocagemCycleYear(dateStr) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return m >= ROCAGEM_CYCLE_START_MONTH ? y : y - 1;
+}
+function isCurrentRocagemCycle(dateStr) {
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-01`;
+  return rocagemCycleYear(dateStr) === rocagemCycleYear(todayIso);
+}
 // Usado pelo Histórico pra marcar automaticamente um trecho como
 // "concluído" numa camada (Roçagem ou Acesso trator) quando um registro
 // novo é criado — só grava o estado concluído, nunca desmarca nada.
@@ -537,6 +551,85 @@ function applyLayerRangeDone(statuses, subKey, layerKey, trackerDe, trackerAte) 
     subData[n] = updated;
   }
   return { ...statuses, [subKey]: subData };
+}
+// Recalcula do zero, a partir do Histórico, as camadas de Roçagem e Acesso
+// trator — usado pela ferramenta "Recalcular a partir do Histórico" em
+// Indicadores pra reparar status que ficaram errados (ex.: conclusão
+// herdada de um ciclo anterior, ou trecho de trator que nunca foi
+// reprocessado). Acesso trator é cumulativo, qualquer ano marca "Liberado".
+// Roçagem só considera o ciclo vigente: marca "Concluída" quem tem
+// acabamento no ciclo atual, e volta pra "Pendente" quem estava marcado
+// "Concluída" sem nenhum acabamento do ciclo atual cobrindo aquele tracker.
+function reconcileFromHistory(statuses) {
+  const entries = getHistoryEntries(statuses);
+  let next = { ...statuses };
+
+  entries
+    .filter((e) => e.fase === "rocagem_trator")
+    .forEach((e) => {
+      next = applyLayerRangeDone(next, e.subKey, "trator", e.trackerDe, e.trackerAte);
+    });
+
+  const coveredBySub = {};
+  entries
+    .filter((e) => e.fase === "rocagem_acabamento" && isCurrentRocagemCycle(e.data))
+    .forEach((e) => {
+      const set = coveredBySub[e.subKey] || (coveredBySub[e.subKey] = new Set());
+      for (let n = e.trackerDe; n <= e.trackerAte; n++) set.add(n);
+    });
+
+  SUB_KEYS.forEach((subKey) => {
+    const subData = { ...(next[subKey] || {}) };
+    const covered = coveredBySub[subKey] || new Set();
+    let changed = false;
+    Object.keys(subData).forEach((nStr) => {
+      const n = Number(nStr);
+      const cur = getStatus({ [subKey]: subData }, subKey, n);
+      if (cur[LAYER_IDX.rocagem] === LAYER_DONE_IDX.rocagem && !covered.has(n)) {
+        const updated = [...cur];
+        updated[LAYER_IDX.rocagem] = 0;
+        subData[n] = updated;
+        changed = true;
+      }
+    });
+    covered.forEach((n) => {
+      const cur = getStatus({ [subKey]: subData }, subKey, n);
+      if (cur[LAYER_IDX.rocagem] !== LAYER_DONE_IDX.rocagem) {
+        const updated = [...cur];
+        updated[LAYER_IDX.rocagem] = LAYER_DONE_IDX.rocagem;
+        subData[n] = updated;
+        changed = true;
+      }
+    });
+    if (changed) next[subKey] = subData;
+  });
+
+  return next;
+}
+// Compara o estado atual com o resultado de reconcileFromHistory pra
+// mostrar uma prévia (por subcampo) antes do usuário confirmar a aplicação.
+function diffReconcile(statuses) {
+  const next = reconcileFromHistory(statuses);
+  const bySub = {};
+  SUB_KEYS.forEach((subKey) => {
+    const before = statuses[subKey] || {};
+    const after = next[subKey] || {};
+    const allNs = new Set([...Object.keys(before), ...Object.keys(after)].map(Number));
+    let tratorLiberado = 0, rocagemConcluida = 0, rocagemPendente = 0;
+    allNs.forEach((n) => {
+      const b = getStatus({ [subKey]: before }, subKey, n);
+      const a = getStatus({ [subKey]: after }, subKey, n);
+      if (b[LAYER_IDX.trator] !== a[LAYER_IDX.trator] && a[LAYER_IDX.trator] === LAYER_DONE_IDX.trator) tratorLiberado++;
+      if (b[LAYER_IDX.rocagem] !== a[LAYER_IDX.rocagem]) {
+        if (a[LAYER_IDX.rocagem] === LAYER_DONE_IDX.rocagem) rocagemConcluida++;
+        else rocagemPendente++;
+      }
+    });
+    if (tratorLiberado || rocagemConcluida || rocagemPendente) {
+      bySub[subKey] = { tratorLiberado, rocagemConcluida, rocagemPendente };
+    }
+  });
+  return { next, bySub };
 }
 // Acha registros já existentes (mesmo subcampo + fase + ano) cujo trecho
 // de tracker cruza com o intervalo [de, ate] que está sendo cadastrado —
@@ -2623,7 +2716,7 @@ function HistRegistrarForm({ onSubmit, entries }) {
           <span style={{ color: P.done, fontSize: 12, fontWeight: 700 }}>✓ Registrado — veja em "Últimos registros" logo abaixo.</span>
         )}
       </div>
-      {fase === "rocagem_acabamento" && data.slice(0, 4) === String(new Date().getFullYear()) && (
+      {fase === "rocagem_acabamento" && data && isCurrentRocagemCycle(data) && (
         <div style={{ marginTop: 10, fontSize: 11, color: P.chromeMuted }}>
           ✓ Isso também marca os trackers {pad3(de)}–{pad3(ate)} do SDM {subKey} como <b>Concluída</b> na camada de Roçagem.
         </div>
@@ -3141,6 +3234,17 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   const [compareFase, setCompareFase] = useState("rocagem_acabamento");
   const [rankingYear, setRankingYear] = useState(String(new Date().getFullYear()));
   const [tratorDaysCols, setTratorDaysCols] = useState(["tratorDays", "acabamentoDays", "totalDays"]);
+  const [reconcilePreview, setReconcilePreview] = useState(null);
+
+  const checkReconcile = useCallback(() => {
+    setReconcilePreview(diffReconcile(statuses));
+  }, [statuses]);
+
+  const applyReconcile = useCallback(() => {
+    if (!reconcilePreview) return;
+    setStatuses(reconcilePreview.next);
+    setReconcilePreview(null);
+  }, [reconcilePreview, setStatuses]);
 
   const addEntry = useCallback((entry) => {
     setStatuses((prev) => {
@@ -3149,15 +3253,15 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
       }];
       let next = { ...prev, _history: list };
 
-      // Acabamento de roçagem do ano corrente marca automaticamente esse
-      // trecho como "Concluída" na camada de Roçagem — só no momento deste
-      // registro novo (nunca reprocessando o histórico inteiro de novo) e
-      // só GRAVANDO o estado concluído, nunca apagando/resetando nada. Isso
-      // preserva trackers que já estavam concluídos direto na camada de
-      // Roçagem sem passar pelo Histórico. Backfill de anos anteriores
-      // (registro retroativo de ciclo passado) não mexe na camada atual.
-      const currentYear = String(new Date().getFullYear());
-      if (entry.fase === "rocagem_acabamento" && entry.data.slice(0, 4) === currentYear) {
+      // Acabamento de roçagem do CICLO vigente (maio a maio, não
+      // ano-calendário — ver isCurrentRocagemCycle) marca automaticamente
+      // esse trecho como "Concluída" na camada de Roçagem — só no momento
+      // deste registro novo (nunca reprocessando o histórico inteiro de
+      // novo) e só GRAVANDO o estado concluído, nunca apagando/resetando
+      // nada. Isso preserva trackers que já estavam concluídos direto na
+      // camada de Roçagem sem passar pelo Histórico. Backfill de ciclos
+      // anteriores (registro retroativo) não mexe na camada atual.
+      if (entry.fase === "rocagem_acabamento" && isCurrentRocagemCycle(entry.data)) {
         next = applyLayerRangeDone(next, entry.subKey, "rocagem", entry.trackerDe, entry.trackerAte);
       }
 
@@ -3217,6 +3321,43 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
           <StatTile label="Registros no histórico" value={entries.length} />
           <StatTile label="Dias sem atividade" value={downtime.totalDays} />
         </div>
+
+        {!readOnly && (
+          <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Recalcular a partir do Histórico</div>
+            <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 12, lineHeight: 1.5 }}>
+              Refaz as camadas de Roçagem e Acesso trator do zero, lendo todos os registros do Histórico: marca "Liberado" todo trecho já roçado pelo trator (qualquer ano) e ajusta a Roçagem pro ciclo vigente (maio/{rocagemCycleYear(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`)} a abril/{rocagemCycleYear(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`) + 1}) — corrige trackers marcados "Concluída" por engano com base num ciclo anterior. Não confirma sozinho: mostra a prévia antes.
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <button onClick={checkReconcile} style={{
+                background: P.blue, border: "none", color: "#fff", borderRadius: 8, padding: "8px 16px",
+                fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+              }}>Verificar</button>
+              {reconcilePreview && (
+                Object.keys(reconcilePreview.bySub).length === 0 ? (
+                  <span style={{ color: P.chromeMuted, fontSize: 12 }}>Nada pra corrigir — tudo já reflete o Histórico.</span>
+                ) : (
+                  <button onClick={applyReconcile} style={{
+                    background: P.warn, border: "none", color: "#fff", borderRadius: 8, padding: "8px 16px",
+                    fontSize: 12.5, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                  }}>Aplicar correção</button>
+                )
+              )}
+            </div>
+            {reconcilePreview && Object.keys(reconcilePreview.bySub).length > 0 && (
+              <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
+                {Object.entries(reconcilePreview.bySub).map(([subKey, d]) => (
+                  <div key={subKey} style={{ fontSize: 12, color: P.chromeText }}>
+                    <b>SDM {subKey}</b>{" "}
+                    {d.tratorLiberado > 0 && <span>· {d.tratorLiberado} tracker(s) → Acesso trator Liberado</span>}
+                    {d.rocagemConcluida > 0 && <span>· {d.rocagemConcluida} tracker(s) → Roçagem Concluída</span>}
+                    {d.rocagemPendente > 0 && <span>· {d.rocagemPendente} tracker(s) → Roçagem volta pra Pendente (concluído fora do ciclo vigente)</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
