@@ -248,13 +248,19 @@ function getHistoryEntries(statuses) { return statuses._history || []; }
 // distorce muito quando o trabalho é pontual: faz um trecho crítico,
 // vai pra outro subcampo, volta semanas depois pra terminar. Contando só
 // os dias com registro de verdade, esse vai-e-volta não infla a conta.
-function computeDaysRanking(entries, faseKey) {
+// year: "all" soma dias de todos os anos (cuidado — um subcampo
+// trabalhado em ciclos diferentes acumula os dois, inflando o total);
+// um ano específico isola só aquele ciclo, que é o que faz sentido pra
+// comparar velocidade dentro do mesmo período de trabalho.
+function computeDaysRanking(entries, faseKey, year = "all") {
   const bySub = {};
-  entries.filter((e) => e.fase === faseKey).forEach((e) => {
-    const g = bySub[e.subKey] || (bySub[e.subKey] = { dates: new Set(), qty: 0 });
-    g.dates.add(e.data);
-    g.qty += histEntryQty(e);
-  });
+  entries
+    .filter((e) => e.fase === faseKey && (year === "all" || e.data.slice(0, 4) === year))
+    .forEach((e) => {
+      const g = bySub[e.subKey] || (bySub[e.subKey] = { dates: new Set(), qty: 0 });
+      g.dates.add(e.data);
+      g.qty += histEntryQty(e);
+    });
   return Object.entries(bySub)
     .map(([subKey, g]) => ({ subKey, days: g.dates.size, qty: g.qty }))
     .sort((a, b) => a.days - b.days);
@@ -2828,6 +2834,7 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   const entries = useMemo(() => getHistoryEntries(statuses), [statuses]);
   const sortedEntries = useMemo(() => [...entries].sort((a, b) => b.data.localeCompare(a.data)), [entries]);
   const [compareFase, setCompareFase] = useState("rocagem_acabamento");
+  const [rankingYear, setRankingYear] = useState(String(new Date().getFullYear()));
 
   const addEntry = useCallback((entry) => {
     setStatuses((prev) => {
@@ -2885,8 +2892,9 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
   }
 
   if (tab === "indicadores") {
-    const rankingRocagem = computeDaysRanking(entries, "rocagem_acabamento");
-    const rankingLavagem = computeDaysRanking(entries, "lavagem");
+    const rankingYearOptions = [...new Set(entries.map((e) => e.data.slice(0, 4)))].sort().reverse();
+    const rankingRocagem = computeDaysRanking(entries, "rocagem_acabamento", rankingYear);
+    const rankingLavagem = computeDaysRanking(entries, "lavagem", rankingYear);
     const tratorVsAcabamento = computeTratorVsAcabamento(entries);
     const downtime = computeDowntimeByMotivo(entries);
     const progRocagem = computeLiveProgress(statuses, "rocagem");
@@ -2902,9 +2910,16 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
           <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16, flex: "1 1 320px" }}>
-            <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700, marginBottom: 4 }}>Ranking de dias — Roçagem</div>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+              <div style={{ color: P.chromeText, fontSize: 13, fontWeight: 700 }}>Ranking de dias — Roçagem</div>
+              <select value={rankingYear} onChange={(e) => setRankingYear(e.target.value)} style={{ ...histFieldInput, fontSize: 11.5 }}>
+                <option value="all">Todos os anos</option>
+                {rankingYearOptions.map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            </div>
             <div style={{ color: P.chromeMuted, fontSize: 11, marginBottom: 14 }}>
               Dias distintos com registro de acabamento naquele subcampo, do menor pro maior.
+              {rankingYear === "all" && " Somando todos os anos — um subcampo trabalhado em ciclos diferentes acumula os dois."}
             </div>
             {rankingRocagem.length === 0 ? (
               <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros de acabamento de roçagem ainda.</div>
