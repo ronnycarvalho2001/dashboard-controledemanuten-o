@@ -1794,7 +1794,7 @@ function LoginOverlay({ phase, onLogin }) {
   return (
     <div style={{
       position: "fixed", inset: 0, zIndex: 9999,
-      background: "#0b0f1e",
+      background: P.navy,
       opacity: fading ? 0 : 1,
       transition: "opacity 0.8s ease",
       pointerEvents: fading ? "none" : "auto",
@@ -1803,8 +1803,9 @@ function LoginOverlay({ phase, onLogin }) {
         position: "absolute", inset: 0,
         backgroundImage: `url("${BG_IMG}")`,
         backgroundSize: "cover", backgroundPosition: "center",
-        filter: "brightness(0.4)",
+        filter: "brightness(0.45) saturate(0.9)",
       }} />
+      <div style={{ position: "absolute", inset: 0, background: `linear-gradient(180deg, ${P.navy}99, ${P.navy}cc)` }} />
 
       {showCard && (
         <div style={{
@@ -1812,23 +1813,23 @@ function LoginOverlay({ phase, onLogin }) {
           zIndex: 1, animation: "fadeSlideIn 0.5s ease",
         }}>
           <div style={{
-            background: "rgba(11,15,30,0.82)", backdropFilter: "blur(24px)",
-            border: "1px solid rgba(245,210,0,0.18)", borderRadius: 20,
+            background: "rgba(255,255,255,0.96)", backdropFilter: "blur(24px)",
+            border: "1px solid rgba(255,255,255,0.6)", borderRadius: 20,
             padding: "48px 44px 40px", width: 380, maxWidth: "90vw",
             display: "flex", flexDirection: "column", alignItems: "center", gap: 28,
-            boxShadow: "0 24px 80px rgba(0,0,0,0.5)",
+            boxShadow: "0 24px 80px rgba(6,12,32,0.45)",
           }}>
             <img src="/logo-airbox.jpg" alt="Airbox" style={{ height: 52, borderRadius: 8 }} />
 
             <div style={{ textAlign: "center" }}>
-              <div style={{ color: "#F5D200", fontSize: 20, fontWeight: 700, letterSpacing: 0.5, lineHeight: 1.3 }}>
+              <div style={{ color: P.chromeText, fontSize: 20, fontWeight: 700, letterSpacing: 0.5, lineHeight: 1.3 }}>
                 UFV Serra do Mato
               </div>
-              <div style={{ color: "#7b8bad", fontSize: 11.5, letterSpacing: 1.5, fontFamily: "monospace", marginTop: 5 }}>
+              <div style={{ color: P.chromeMuted, fontSize: 11.5, letterSpacing: 1.5, fontFamily: "monospace", marginTop: 5 }}>
                 Trairi/CE
               </div>
-              <div style={{ width: 40, height: 2, background: "rgba(245,210,0,0.3)", borderRadius: 1, margin: "10px auto 0" }} />
-              <div style={{ color: "#7b8bad", fontSize: 10, letterSpacing: 2, fontFamily: "monospace", marginTop: 8, textTransform: "uppercase" }}>
+              <div style={{ width: 40, height: 2, background: P.blue, opacity: 0.4, borderRadius: 1, margin: "10px auto 0" }} />
+              <div style={{ color: P.chromeMuted, fontSize: 10, letterSpacing: 2, fontFamily: "monospace", marginTop: 8, textTransform: "uppercase" }}>
                 Controle de Manutenção
               </div>
             </div>
@@ -1841,8 +1842,8 @@ function LoginOverlay({ phase, onLogin }) {
                   onKeyDown={(e) => e.key === "Enter" && handleLogin("admin")}
                   style={{
                     width: "100%", padding: "14px 16px", borderRadius: 12, fontSize: 14,
-                    background: "rgba(16,23,41,0.9)", color: "#e8edf8",
-                    border: `1.5px solid ${error ? "#ff5f7e" : "rgba(245,210,0,0.25)"}`,
+                    background: P.page, color: P.chromeText,
+                    border: `1.5px solid ${error ? P.danger : P.chromeBorder}`,
                     outline: "none", fontFamily: "inherit",
                     transition: "border-color 0.3s",
                   }}
@@ -1850,7 +1851,7 @@ function LoginOverlay({ phase, onLogin }) {
                 {error && (
                   <div style={{
                     position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)",
-                    color: "#ff5f7e", fontSize: 12, fontWeight: 600, fontFamily: "monospace",
+                    color: P.danger, fontSize: 12, fontWeight: 600, fontFamily: "monospace",
                     animation: "shake 0.4s ease",
                   }}>Senha incorreta</div>
                 )}
@@ -1858,7 +1859,7 @@ function LoginOverlay({ phase, onLogin }) {
 
               <button onClick={() => handleLogin("admin")} style={{
                 width: "100%", padding: "14px 0", borderRadius: 12, border: "none",
-                background: "linear-gradient(135deg, #F5D200, #C9AC00)", color: "#0b0f1e",
+                background: P.blue, color: "#fff",
                 fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
                 letterSpacing: 0.5,
               }}>
@@ -1866,22 +1867,22 @@ function LoginOverlay({ phase, onLogin }) {
               </button>
 
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ flex: 1, height: 1, background: "rgba(123,139,173,0.25)" }} />
-                <span style={{ color: "#7b8bad", fontSize: 11, fontFamily: "monospace" }}>ou</span>
-                <div style={{ flex: 1, height: 1, background: "rgba(123,139,173,0.25)" }} />
+                <div style={{ flex: 1, height: 1, background: P.chromeBorder }} />
+                <span style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace" }}>ou</span>
+                <div style={{ flex: 1, height: 1, background: P.chromeBorder }} />
               </div>
 
               <button onClick={() => handleLogin("visitor")} style={{
                 width: "100%", padding: "12px 0", borderRadius: 12,
-                border: "1.5px solid rgba(77,166,255,0.35)", background: "rgba(77,166,255,0.08)",
-                color: "#4da6ff", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                border: `1.5px solid ${P.blue}55`, background: P.blueG,
+                color: P.blue, fontSize: 13, fontWeight: 600, cursor: "pointer",
                 fontFamily: "inherit", letterSpacing: 0.3,
               }}>
                 Acessar como Visitante
               </button>
             </div>
 
-            <div style={{ color: "rgba(123,139,173,0.35)", fontSize: 9, fontFamily: "monospace", letterSpacing: 1.5 }}>
+            <div style={{ color: P.chromeMuted, opacity: 0.7, fontSize: 9, fontFamily: "monospace", letterSpacing: 1.5 }}>
               POWERED BY AIRBOX
             </div>
           </div>
@@ -1897,13 +1898,13 @@ function LoginOverlay({ phase, onLogin }) {
           <div style={{ display: "flex", gap: 10 }}>
             {[0, 1, 2, 3, 4].map((i) => (
               <div key={i} style={{
-                width: 12, height: 12, borderRadius: "50%", background: "#F5D200",
+                width: 12, height: 12, borderRadius: "50%", background: "#7fb2ff",
                 animation: "dotPulse 1.4s ease-in-out infinite",
                 animationDelay: `${i * 0.16}s`,
               }} />
             ))}
           </div>
-          <div style={{ color: "rgba(245,210,0,0.7)", fontSize: 11, fontFamily: "monospace", letterSpacing: 2 }}>
+          <div style={{ color: "rgba(127,178,255,0.85)", fontSize: 11, fontFamily: "monospace", letterSpacing: 2 }}>
             CARREGANDO
           </div>
         </div>
