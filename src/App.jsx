@@ -2896,16 +2896,18 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
 
   if (tab === "registrar") {
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", overflowY: "auto" }}>
-        <HistRegistrarForm onSubmit={addEntry} />
-        <HistBulkImport onSubmitEntry={addEntry} />
-        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%", minHeight: 0, overflowY: "auto" }}>
+        <div style={{ flexShrink: 0 }}><HistRegistrarForm onSubmit={addEntry} /></div>
+        <div style={{ flexShrink: 0 }}><HistBulkImport onSubmitEntry={addEntry} /></div>
+        <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
           <div style={{ padding: "10px 14px", borderBottom: `1px solid ${P.chromeBorder}`, color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5 }}>
             ÚLTIMOS REGISTROS
           </div>
-          {sortedEntries.length === 0 ? (
-            <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro ainda.</div>
-          ) : sortedEntries.slice(0, 12).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
+          <div style={{ maxHeight: 420, overflowY: "auto" }}>
+            {sortedEntries.length === 0 ? (
+              <div style={{ padding: 20, textAlign: "center", color: P.chromeMuted, fontSize: 12.5 }}>Nenhum registro ainda.</div>
+            ) : sortedEntries.slice(0, 12).map((e) => <HistEntryRow key={e.id} e={e} onDelete={deleteEntry} readOnly={readOnly} />)}
+          </div>
         </div>
       </div>
     );
