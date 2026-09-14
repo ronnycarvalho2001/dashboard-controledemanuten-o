@@ -101,6 +101,7 @@ function heatColor(pct) {
 }
 
 function pad3(n) { return String(n).padStart(3, "0"); }
+function pad2(n) { return String(n).padStart(2, "0"); }
 function trackerId(key, n) {
   const [a, b] = key.split(".");
   return `EC-${a}-${b}-TR-${pad3(n)}`;
@@ -235,7 +236,7 @@ function histMotivoLabel(e) {
 const HIST_YEAR_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a"];
 const HISTORICO_TAB_LABELS = {
   linha_do_tempo: "Linha do tempo", indicadores: "Indicadores",
-  comparar_ciclos: "Comparar ciclos", registrar: "Registrar",
+  comparar_ciclos: "Comparar ciclos", calendario: "Calendário", registrar: "Registrar",
 };
 function histPhase(key) { return HIST_PHASES.find((p) => p.key === key) || HIST_PHASES[0]; }
 function histEntryQty(e) {
@@ -2335,6 +2336,8 @@ function Sidebar({
               label="Indicadores" onClick={() => onSelectHistoricoTab("indicadores")} />
             <SideNavButton active={historicoTab === "comparar_ciclos"} collapsed={collapsed}
               label="Comparar ciclos" onClick={() => onSelectHistoricoTab("comparar_ciclos")} />
+            <SideNavButton active={historicoTab === "calendario"} collapsed={collapsed}
+              label="Calendário" onClick={() => onSelectHistoricoTab("calendario")} />
             <SideNavButton active={historicoTab === "registrar"} collapsed={collapsed}
               label="Registrar" onClick={() => onSelectHistoricoTab("registrar")} />
           </div>
@@ -2703,6 +2706,138 @@ function HistBulkImport({ onSubmitEntry, entries }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const CALENDAR_WEEKDAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+const calNavBtnStyle = {
+  width: 28, height: 28, borderRadius: 7, border: `1px solid ${P.chromeBorder}`, background: P.page,
+  color: P.chromeText, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+};
+
+function HistCalendarTab({ entries }) {
+  const [selectedFases, setSelectedFases] = useState(HIST_PHASES.map((p) => p.key));
+  const [subFilter, setSubFilter] = useState("all");
+  const [monthCursor, setMonthCursor] = useState(() => {
+    const dates = entries.map((e) => e.data).filter(Boolean).sort();
+    return dates.length ? dates[dates.length - 1].slice(0, 7) : new Date().toISOString().slice(0, 7);
+  });
+
+  const toggleFase = (key) => setSelectedFases((cur) => cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key]);
+  const shiftMonth = (delta) => {
+    const [y, m] = monthCursor.split("-").map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setMonthCursor(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`);
+  };
+
+  const filtered = entries.filter((e) =>
+    selectedFases.includes(e.fase) &&
+    (subFilter === "all" || e.subKey === subFilter || e.subKey === "todos")
+  );
+
+  // dia (YYYY-MM-DD) -> { fase: [registros daquele dia] } — "sem_atividade"
+  // pode cobrir um intervalo (data → dataFim), então cai em todo dia do meio.
+  const byDate = {};
+  filtered.forEach((e) => {
+    const end = e.dataFim || e.data;
+    for (let d = new Date(e.data); d <= new Date(end); d.setDate(d.getDate() + 1)) {
+      const iso = d.toISOString().slice(0, 10);
+      const bucket = byDate[iso] || (byDate[iso] = {});
+      (bucket[e.fase] || (bucket[e.fase] = [])).push(e);
+    }
+  });
+
+  const [y, m] = monthCursor.split("-").map(Number);
+  const firstOfMonth = new Date(y, m - 1, 1);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const startWeekday = (firstOfMonth.getDay() + 6) % 7; // 0 = segunda
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+  const monthLabel = firstOfMonth.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+        <div style={{ color: P.chromeMuted, fontSize: 11, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 8 }}>
+          ATIVIDADES NO CALENDÁRIO (marque uma ou mais)
+        </div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+          {HIST_PHASES.map((p) => (
+            <label key={p.key} style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: P.chromeText, cursor: "pointer" }}>
+              <input type="checkbox" checked={selectedFases.includes(p.key)} onChange={() => toggleFase(p.key)} />
+              <span style={{ width: 8, height: 8, borderRadius: 2, background: p.color, flexShrink: 0 }} />
+              {p.label}
+            </label>
+          ))}
+          <select value={subFilter} onChange={(e) => setSubFilter(e.target.value)} style={{ ...histFieldInput, marginLeft: "auto" }}>
+            <option value="all">Todos os subcampos</option>
+            {SUB_KEYS.map((k) => <option key={k} value={k}>SDM {k}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ background: P.chromeCard, border: `1px solid ${P.chromeBorder}`, borderRadius: 12, padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16, marginBottom: 14 }}>
+          <button onClick={() => shiftMonth(-1)} style={calNavBtnStyle}>‹</button>
+          <div style={{ color: P.chromeText, fontSize: 14, fontWeight: 700, textTransform: "capitalize", minWidth: 170, textAlign: "center" }}>
+            {monthLabel}
+          </div>
+          <button onClick={() => shiftMonth(1)} style={calNavBtnStyle}>›</button>
+        </div>
+
+        <div style={{ display: "flex", gap: 20, flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 420px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4, marginBottom: 4 }}>
+              {CALENDAR_WEEKDAYS.map((w) => (
+                <div key={w} style={{ textAlign: "center", fontSize: 10, color: P.chromeMuted, fontFamily: "monospace" }}>{w}</div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 4 }}>
+              {cells.map((d, i) => {
+                if (d == null) return <div key={i} />;
+                const iso = `${y}-${pad2(m)}-${pad2(d)}`;
+                const dayBucket = byDate[iso] || {};
+                const fasesHere = Object.keys(dayBucket);
+                const title = fasesHere.length
+                  ? fasesHere.map((f) => `${histPhase(f).label}: ${dayBucket[f].map((e) => e.subKey === "todos" ? "Todos" : `SDM ${e.subKey}`).join(", ")}`).join(" · ")
+                  : "Sem atividade registrada esse dia";
+                return (
+                  <div key={i} title={title} style={{
+                    minHeight: 46, borderRadius: 6, border: `1px solid ${P.chromeBorder}`,
+                    background: fasesHere.length ? P.chromeCard : P.page,
+                    display: "flex", flexDirection: "column", overflow: "hidden",
+                  }}>
+                    <div style={{ fontSize: 10, color: P.chromeMuted, fontFamily: "monospace", padding: "2px 4px" }}>{d}</div>
+                    <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+                      {fasesHere.map((f) => (
+                        <div key={f} style={{ flex: 1, background: histPhase(f).color + "99" }} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 170 }}>
+            <div style={{ color: P.chromeMuted, fontSize: 10.5, fontFamily: "monospace", letterSpacing: 0.5, marginBottom: 2 }}>LEGENDA</div>
+            {selectedFases.length === 0 ? (
+              <div style={{ color: P.chromeMuted, fontSize: 11.5 }}>Nenhuma atividade marcada acima.</div>
+            ) : HIST_PHASES.filter((p) => selectedFases.includes(p.key)).map((p) => (
+              <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: P.chromeText }}>
+                <span style={{ width: 12, height: 12, borderRadius: 3, background: p.color, flexShrink: 0 }} />
+                {p.label}
+              </div>
+            ))}
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: P.chromeMuted, marginTop: 8 }}>
+              <span style={{ width: 12, height: 12, borderRadius: 3, background: P.page, border: `1px solid ${P.chromeBorder}`, flexShrink: 0 }} />
+              Sem registro (lacuna)
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3095,6 +3230,14 @@ function HistoricoView({ statuses, setStatuses, readOnly, historicoTab }) {
             <div style={{ color: P.chromeMuted, fontSize: 12.5 }}>Sem registros dessa fase ainda.</div>
           ) : <SubcampoYearTable yearKeys={detail.yearKeys} subKeys={detail.subKeys} bySub={detail.bySub} />}
         </div>
+      </div>
+    );
+  }
+
+  if (tab === "calendario") {
+    return (
+      <div style={{ height: "100%", overflowY: "auto" }}>
+        <HistCalendarTab entries={entries} />
       </div>
     );
   }
