@@ -3294,7 +3294,11 @@ export default function App() {
               combinersMode={combinersMode} />
           </div>
         ) : view === "historico" ? (
-          readOnly ? null : <HistoricoView statuses={statuses} setStatuses={setStatusesByUser} readOnly={readOnly} historicoTab={historicoTab} />
+          readOnly ? null : (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <HistoricoView statuses={statuses} setStatuses={setStatusesByUser} readOnly={readOnly} historicoTab={historicoTab} />
+            </div>
+          )
         ) : (
           <div style={{ flex: 1, minHeight: 0 }}>
             <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatusesByUser}
