@@ -2359,7 +2359,6 @@ function SideToolButton({ active, collapsed, label, onClick, color }) {
 }
 
 function Sidebar({
-  collapsed, onToggleCollapse,
   view, onNavigate,
   activeLayer, onChangeLayer,
   readOnly,
@@ -2384,21 +2383,24 @@ function Sidebar({
   const showHeatmapTool = view === "overview" && !readOnly && !combinersMode
     && activeLayer !== "trator" && activeLayer !== "trackers" && !isFocosLayer(activeLayer);
 
+  // Recolhido em repouso, expande sozinho ao passar o cursor na área azul e
+  // recolhe de novo ao sair — sem toggle manual. Empurra o mapa de verdade
+  // (largura real do flex, não overlay) — o MapResizeWatcher já chama
+  // invalidateSize() sozinho quando o container muda de tamanho (foi feito
+  // originalmente pro toggle manual, então já cobre esse caso também).
+  const [hovering, setHovering] = useState(false);
+  const collapsed = !hovering;
+
   return (
-    <aside style={{
-      width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, flexShrink: 0,
-      transition: "width .18s ease",
-      background: P.navy, position: "relative",
-      display: "flex", flexDirection: "column", height: "100%",
-    }}>
-      <button onClick={onToggleCollapse} title={collapsed ? "Expandir menu" : "Recolher menu"} style={{
-        position: "absolute", top: 20, right: -12, zIndex: 5,
-        width: 24, height: 24, borderRadius: "50%",
-        background: P.blue, border: `2px solid ${P.page}`,
-        color: "#fff", fontSize: 11, cursor: "pointer",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        boxShadow: "0 1px 4px rgba(0,0,0,0.35)",
-      }}>{collapsed ? "›" : "‹"}</button>
+    <aside
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+      style={{
+        width: collapsed ? SIDEBAR_W_COLLAPSED : SIDEBAR_W, flexShrink: 0,
+        transition: "width .18s ease",
+        background: P.navy, position: "relative",
+        display: "flex", flexDirection: "column", height: "100%",
+      }}>
 
       <div style={{
         display: "flex", alignItems: "center", gap: 10, flexShrink: 0,
@@ -2408,16 +2410,22 @@ function Sidebar({
         <img src="/logo-airbox.jpg" alt="Airbox" style={collapsed
           ? { width: 60, height: "auto", borderRadius: 4, display: "block" }
           : { height: 26, borderRadius: 4, flexShrink: 0 }} />
-        {!collapsed && (
-          <div style={{ minWidth: 0 }}>
-            <div style={{ color: "#fff", fontSize: 12.5, fontWeight: 700, letterSpacing: 0.4, lineHeight: 1.25, whiteSpace: "nowrap" }}>
-              UFV SDM
-            </div>
-            <div style={{ color: "rgba(232,237,248,0.55)", fontSize: 8.5, letterSpacing: 0.5, fontFamily: "monospace", lineHeight: 1.3 }}>
-              CONTROLE DE MANUTENÇÃO
-            </div>
+        {/* Sempre montado (não entra/sai do DOM) e some/aparece por opacity,
+            com um pequeno atraso ao expandir — se ficasse condicionado a
+            !collapsed, o texto "pipocava" quebrado/cortado no meio da
+            animação de largura, antes do <aside> terminar de abrir espaço. */}
+        <div style={{
+          minWidth: 0, overflow: "hidden", whiteSpace: "nowrap",
+          opacity: collapsed ? 0 : 1,
+          transition: collapsed ? "opacity .1s ease" : "opacity .15s ease .06s",
+        }}>
+          <div style={{ color: "#fff", fontSize: 12.5, fontWeight: 700, letterSpacing: 0.4, lineHeight: 1.25, whiteSpace: "nowrap" }}>
+            UFV SDM
           </div>
-        )}
+          <div style={{ color: "rgba(232,237,248,0.55)", fontSize: 8.5, letterSpacing: 0.5, fontFamily: "monospace", lineHeight: 1.3, whiteSpace: "nowrap" }}>
+            CONTROLE DE MANUTENÇÃO
+          </div>
+        </div>
       </div>
 
       {!collapsed && (
@@ -3548,16 +3556,11 @@ export default function App() {
   const monitoramentoRef = useRef(null);
   const [monRefreshState, setMonRefreshState] = useState({ refreshing: false, lastUpdated: null, showRefresh: false });
   const onMonRefreshStateChange = useCallback((s) => setMonRefreshState(s), []);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    try { return localStorage.getItem("sdm_sidebar_collapsed") === "1"; } catch { return false; }
-  });
-  const toggleSidebar = useCallback(() => {
-    setSidebarCollapsed((v) => {
-      const next = !v;
-      try { localStorage.setItem("sdm_sidebar_collapsed", next ? "1" : "0"); } catch {}
-      return next;
-    });
-  }, []);
+  // O menu agora fica sempre recolhido em repouso e expande sozinho ao
+  // passar o cursor (ver Sidebar) — não tem mais toggle manual nem estado
+  // persistido; a breadcrumb no topo sempre mostra o caminho completo, já
+  // que o menu nunca fica "fixo aberto" empurrando o layout.
+  const sidebarCollapsed = true;
   const setActiveLayer = (layer) => {
     // Escolher qualquer camada normal sai do modo Combiners — senão o botão
     // fica "ativo" e o mapa não muda, dando a impressão de bug.
@@ -3766,7 +3769,6 @@ export default function App() {
       )}
 
       <Sidebar
-        collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebar}
         view={view} onNavigate={(key) => setView(key || "overview")}
         activeLayer={activeLayer} onChangeLayer={setActiveLayer}
         readOnly={readOnly}
