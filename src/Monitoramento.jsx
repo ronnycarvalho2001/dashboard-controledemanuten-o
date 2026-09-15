@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo, Component } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo, useImperativeHandle, forwardRef, Component } from "react";
 import * as XLSX from "xlsx";
 import { P } from "./App.jsx";
 
@@ -1211,7 +1211,7 @@ function MiniCalendar({ datesSet, selectedDate, onSelect, invColors }) {
 }
 
 // ── Dashboard principal ───────────────────────────────────────────────────────
-function MonitoramentoInner({ activeTab }) {
+const MonitoramentoInner = forwardRef(function MonitoramentoInner({ activeTab, onRefreshStateChange }, ref) {
   const [allData,      setAllData]      = useState({});
   const [selectedDate, setSelectedDate] = useState(null);
   const [vars,         setVars]         = useState(["pac",NONE,NONE,NONE]);
@@ -1235,6 +1235,17 @@ function MonitoramentoInner({ activeTab }) {
     setRefreshing(true);
     setTimeout(()=>setRefreshing(false), 1500); // só pro ícone girar um instante, feedback visual
   };
+
+  // O botão de "Atualizar" mora na barra azul do dashboard principal (fora
+  // deste componente) pra não ocupar uma faixa branca inteira só pra ele —
+  // expõe o disparo via ref e avisa o pai do estado atual (girando? quando
+  // foi a última leitura? faz sentido mostrar nesta aba?) pra ele desenhar
+  // o botão.
+  useImperativeHandle(ref, () => ({ refresh: handleRefresh }), [handleRefresh]);
+  const showRefresh = activeTab==="avail" || activeTab==="gen" || activeTab==="combiners";
+  useEffect(() => {
+    onRefreshStateChange?.({ refreshing, lastUpdated, showRefresh });
+  }, [refreshing, lastUpdated, showRefresh, onRefreshStateChange]);
 
   const [sideW,  onSideDrag]   = useDivider(255,180,420,"horizontal");
   const [statsH, onStatsDrag]  = useDivider(190,80,440,"vertical");
@@ -1532,6 +1543,12 @@ function MonitoramentoInner({ activeTab }) {
       <main style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minWidth:0,minHeight:0}}>
 
         {/* ── Barra de navegação + abas ── */}
+        {/* Só existe nas abas com upload de .xlsx (Variáveis/Desbalanceamento)
+            — nas outras (Disponibilidade/Geração/Combiners) essa faixa não
+            tinha mais nada além do botão de Atualizar, que agora mora na
+            barra azul do dashboard principal; sem isso, ela virava uma tira
+            branca vazia ocupando espaço à toa. */}
+        {showFileTab && (
         <div style={{borderBottom:"1px solid rgba(24,36,73,0.10)",
           background:"#ffffff",flexShrink:0}}>
 
@@ -1575,24 +1592,7 @@ function MonitoramentoInner({ activeTab }) {
             )}
 
             <div style={{marginLeft:"auto",fontSize:13,color:"var(--color-text-tertiary)",flexShrink:0,display:"flex",alignItems:"center",gap:10}}>
-              {showFileTab?(
-                <span>{visible.length} visível(is)</span>
-              ):(<>
-                {lastUpdated&&(
-                  <span>
-                    Última leitura <strong style={{fontFamily:"var(--font-mono)",color:"var(--color-text-secondary)"}}>
-                      {lastUpdated.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}
-                    </strong>
-                  </span>
-                )}
-                <button onClick={handleRefresh} title="Buscar dados mais recentes da API"
-                  style={{display:"flex",alignItems:"center",justifyContent:"center",padding:5,cursor:"pointer",
-                    borderRadius:6,border:"0.5px solid var(--color-border-secondary)",
-                    background:"var(--color-background-secondary)",color:"var(--color-text-secondary)"}}>
-                  <i className="ti ti-refresh" style={{fontSize:14,
-                    animation:refreshing?"spin 0.7s linear infinite":"none"}}/>
-                </button>
-              </>)}
+              <span>{visible.length} visível(is)</span>
               {selectedTime&&(
                 <span style={{color:"#1656d6",display:"inline-flex",alignItems:"center",gap:4}}>
                   <i className="ti ti-map-pin" style={{fontSize:13}}/><strong>{selectedTime}</strong>
@@ -1618,6 +1618,7 @@ function MonitoramentoInner({ activeTab }) {
             </div>
           )}
         </div>
+        )}
 
         {/* ── Área do gráfico / disponibilidade ── */}
         <div style={{flex:1,margin:"12px 14px 8px",
@@ -1745,7 +1746,7 @@ function MonitoramentoInner({ activeTab }) {
     </div>
     </div>
   );
-}
+});
 
 // ── Tabela de Estatísticas (sortable) ────────────────────────────────────────
 function StatsTable({ stats, activeVars, fmt }) {
@@ -2939,6 +2940,7 @@ function CombinerPanel({ onLastUpdated, refreshTick, autoSyncTick }) {
   );
 }
 
-export default function MonitoramentoView({ activeTab }) {
-  return <ErrorBoundary><MonitoramentoInner activeTab={activeTab}/></ErrorBoundary>;
-}
+const MonitoramentoView = forwardRef(function MonitoramentoView({ activeTab, onRefreshStateChange }, ref) {
+  return <ErrorBoundary><MonitoramentoInner ref={ref} activeTab={activeTab} onRefreshStateChange={onRefreshStateChange}/></ErrorBoundary>;
+});
+export default MonitoramentoView;

@@ -3545,6 +3545,9 @@ export default function App() {
     setMonitoramentoTab(tab);
     setView("monitoramento");
   }, []);
+  const monitoramentoRef = useRef(null);
+  const [monRefreshState, setMonRefreshState] = useState({ refreshing: false, lastUpdated: null, showRefresh: false });
+  const onMonRefreshStateChange = useCallback((s) => setMonRefreshState(s), []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem("sdm_sidebar_collapsed") === "1"; } catch { return false; }
   });
@@ -3723,6 +3726,7 @@ export default function App() {
         @keyframes dotPulse{0%,80%,100%{opacity:.2;transform:scale(.7)}40%{opacity:1;transform:scale(1)}}
         @keyframes shake{0%,100%{transform:translateX(0) translateY(-50%)}20%,60%{transform:translateX(-6px) translateY(-50%)}40%,80%{transform:translateX(6px) translateY(-50%)}}
         @keyframes fadeSlideIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+        @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
         ::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${P.blue};border-radius:4px;opacity:.5}
         *{scrollbar-color:${P.blue} transparent;scrollbar-width:thin}
         select, input, button { font-family: inherit; }
@@ -3822,6 +3826,22 @@ export default function App() {
               {SUB_KEYS.map((k) => <option key={k} value={k} style={{ color: "#182449", background: "#fff" }}>SDM {k}</option>)}
             </select>
           )}
+          {view === "monitoramento" && monRefreshState.showRefresh && (
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+              {monRefreshState.lastUpdated && (
+                <span style={{ color: "rgba(255,255,255,0.55)", fontSize: 11 }}>
+                  última leitura {monRefreshState.lastUpdated.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+              )}
+              <button onClick={() => monitoramentoRef.current?.refresh()} title="Buscar dados mais recentes da API" style={{
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff",
+                borderRadius: 7, width: 28, height: 28, cursor: "pointer", fontSize: 13, flexShrink: 0,
+              }}>
+                <i className="ti ti-refresh" style={{ animation: monRefreshState.refreshing ? "spin .7s linear infinite" : "none" }} />
+              </button>
+            </div>
+          )}
         </div>
 
         {!loaded ? (
@@ -3854,7 +3874,7 @@ export default function App() {
             ao navegar pra outra tela e voltar — ver histórico da sessão. */}
         {loaded && !readOnly && (
           <div style={{ display: view === "monitoramento" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
-            <MonitoramentoView activeTab={monitoramentoTab} />
+            <MonitoramentoView ref={monitoramentoRef} activeTab={monitoramentoTab} onRefreshStateChange={onMonRefreshStateChange} />
           </div>
         )}
       </div>
