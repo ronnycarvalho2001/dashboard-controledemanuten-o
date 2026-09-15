@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { TRACKER_ELECTRICAL } from "./data/trackerElectrical";
+import MonitoramentoView from "./Monitoramento.jsx";
 
 /* ════════════════════════════════════════════════════════════════════════
    DADOS DA PLANTA — coordenadas reais extraídas do mapa de coordenadas
@@ -58,7 +59,7 @@ function focoQtyColor(qty, maxQty) {
   return `rgb(${r},${g},${b})`;
 }
 
-const P = {
+export const P = {
   bg: "#0b0f1e", surface: "#101729", card: "#161e30", card2: "#1c2540", border: "#253050",
   accent: "#F5D200", accentD: "#C9AC00", accentG: "rgba(245,210,0,0.12)",
   done: "#00e5a0", doneD: "#00b87d", doneG: "rgba(0,229,160,0.13)",
@@ -237,6 +238,10 @@ const HIST_YEAR_PALETTE = ["#2a78d6", "#eb6834", "#1baf7a"];
 const HISTORICO_TAB_LABELS = {
   linha_do_tempo: "Linha do tempo", indicadores: "Indicadores",
   comparar_ciclos: "Comparar ciclos", calendario: "Calendário", registrar: "Registrar",
+};
+const MONITORAMENTO_TAB_LABELS = {
+  vars: "Variáveis", imbalance: "Desbalanceamento",
+  avail: "Disponibilidade", gen: "Geração", combiners: "Combiners",
 };
 function histPhase(key) { return HIST_PHASES.find((p) => p.key === key) || HIST_PHASES[0]; }
 function histEntryQty(e) {
@@ -2363,6 +2368,7 @@ function Sidebar({
   focoType, onChangeFocoType,
   focoVisit, onChangeFocoVisit,
   historicoTab, onSelectHistoricoTab,
+  monitoramentoTab, onSelectMonitoramentoTab,
   syncState, lastUpdated,
   onLogout,
 }) {
@@ -2475,7 +2481,31 @@ function Sidebar({
         </div>
         )}
 
-        {view !== "historico" && (
+        {!readOnly && (
+        <div>
+          <SideNavButton active={view === "monitoramento"} collapsed={collapsed} label="Monitoramento" onClick={() => onSelectMonitoramentoTab(monitoramentoTab)} />
+
+          {view === "monitoramento" && (
+          <div style={{
+            display: "flex", flexDirection: "column", gap: 1, marginTop: 4,
+            marginLeft: 10, paddingLeft: 8, borderLeft: "1px solid rgba(255,255,255,0.16)",
+          }}>
+            <SideNavButton active={monitoramentoTab === "vars"} collapsed={collapsed}
+              label="Variáveis" onClick={() => onSelectMonitoramentoTab("vars")} />
+            <SideNavButton active={monitoramentoTab === "imbalance"} collapsed={collapsed}
+              label="Desbalanceamento" onClick={() => onSelectMonitoramentoTab("imbalance")} />
+            <SideNavButton active={monitoramentoTab === "avail"} collapsed={collapsed}
+              label="Disponibilidade" onClick={() => onSelectMonitoramentoTab("avail")} />
+            <SideNavButton active={monitoramentoTab === "gen"} collapsed={collapsed}
+              label="Geração" onClick={() => onSelectMonitoramentoTab("gen")} />
+            <SideNavButton active={monitoramentoTab === "combiners"} collapsed={collapsed}
+              label="Combiners" onClick={() => onSelectMonitoramentoTab("combiners")} />
+          </div>
+          )}
+        </div>
+        )}
+
+        {view !== "historico" && view !== "monitoramento" && (
         <div>
           <SideSectionLabel collapsed={collapsed}>FERRAMENTAS</SideSectionLabel>
           {showHeatmapTool && (
@@ -3510,6 +3540,11 @@ export default function App() {
     setHistoricoTab(tab);
     setView("historico");
   }, []);
+  const [monitoramentoTab, setMonitoramentoTab] = useState("vars");
+  const selectMonitoramentoTab = useCallback((tab) => {
+    setMonitoramentoTab(tab);
+    setView("monitoramento");
+  }, []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem("sdm_sidebar_collapsed") === "1"; } catch { return false; }
   });
@@ -3747,6 +3782,7 @@ export default function App() {
         focoType={focoType} onChangeFocoType={setFocoType}
         focoVisit={focoVisit} onChangeFocoVisit={setFocoVisit}
         historicoTab={historicoTab} onSelectHistoricoTab={selectHistoricoTab}
+        monitoramentoTab={monitoramentoTab} onSelectMonitoramentoTab={selectMonitoramentoTab}
         syncState={syncState} lastUpdated={lastUpdated}
         onLogout={handleLogout}
       />
@@ -3765,17 +3801,19 @@ export default function App() {
             }}>←</button>
           )}
           <h1 style={{ fontSize: 15, fontWeight: 700, color: "#fff", margin: 0, whiteSpace: "nowrap" }}>
-            {view === "overview" ? "Visão geral" : view === "historico" ? "Histórico" : `SDM ${view}`}
+            {view === "overview" ? "Visão geral" : view === "historico" ? "Histórico" : view === "monitoramento" ? "Monitoramento" : `SDM ${view}`}
           </h1>
           {sidebarCollapsed && (
             <>
               <span style={{ color: "rgba(255,255,255,0.5)", fontSize: 15, fontWeight: 400 }}>/</span>
               <span style={{ color: "rgba(255,255,255,0.85)", fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-                {view === "historico" ? HISTORICO_TAB_LABELS[historicoTab] : layerDisplayLabel(activeLayer)}
+                {view === "historico" ? HISTORICO_TAB_LABELS[historicoTab]
+                  : view === "monitoramento" ? MONITORAMENTO_TAB_LABELS[monitoramentoTab]
+                  : layerDisplayLabel(activeLayer)}
               </span>
             </>
           )}
-          {view !== "overview" && view !== "historico" && (
+          {view !== "overview" && view !== "historico" && view !== "monitoramento" && (
             <select value={view} onChange={(e) => setView(e.target.value)} style={{
               marginLeft: 4, background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.3)", color: "#fff",
               borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontFamily: "inherit", fontWeight: 600,
@@ -3801,13 +3839,22 @@ export default function App() {
               <HistoricoView statuses={statuses} setStatuses={setStatusesByUser} readOnly={readOnly} historicoTab={historicoTab} />
             </div>
           )
-        ) : (
+        ) : view === "monitoramento" ? null : (
           <div style={{ flex: 1, minHeight: 0 }}>
             <SubcampoView key={view} subKey={view} statuses={statuses} setStatuses={setStatusesByUser}
               activeLayer={activeLayer} setActiveLayer={setActiveLayer}
               onNavigate={(key) => setView(key || "overview")} readOnly={readOnly}
               focoType={focoType} setFocoType={setFocoType}
               focoVisit={focoVisit} setFocoVisit={setFocoVisit} />
+          </div>
+        )}
+
+        {/* Monitoramento fica sempre montado (só escondido via display:none) pra
+            nunca perder arquivos .xlsx carregados nem dados já buscados da API
+            ao navegar pra outra tela e voltar — ver histórico da sessão. */}
+        {loaded && !readOnly && (
+          <div style={{ display: view === "monitoramento" ? "flex" : "none", flex: 1, minHeight: 0, flexDirection: "column" }}>
+            <MonitoramentoView activeTab={monitoramentoTab} />
           </div>
         )}
       </div>
