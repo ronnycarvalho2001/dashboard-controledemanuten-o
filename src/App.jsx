@@ -2490,16 +2490,16 @@ function Sidebar({
             display: "flex", flexDirection: "column", gap: 1, marginTop: 4,
             marginLeft: 10, paddingLeft: 8, borderLeft: "1px solid rgba(255,255,255,0.16)",
           }}>
+            <SideNavButton active={monitoramentoTab === "gen"} collapsed={collapsed}
+              label="Geração" onClick={() => onSelectMonitoramentoTab("gen")} />
+            <SideNavButton active={monitoramentoTab === "avail"} collapsed={collapsed}
+              label="Disponibilidade" onClick={() => onSelectMonitoramentoTab("avail")} />
+            <SideNavButton active={monitoramentoTab === "combiners"} collapsed={collapsed}
+              label="Combiners" onClick={() => onSelectMonitoramentoTab("combiners")} />
             <SideNavButton active={monitoramentoTab === "vars"} collapsed={collapsed}
               label="Variáveis" onClick={() => onSelectMonitoramentoTab("vars")} />
             <SideNavButton active={monitoramentoTab === "imbalance"} collapsed={collapsed}
               label="Desbalanceamento" onClick={() => onSelectMonitoramentoTab("imbalance")} />
-            <SideNavButton active={monitoramentoTab === "avail"} collapsed={collapsed}
-              label="Disponibilidade" onClick={() => onSelectMonitoramentoTab("avail")} />
-            <SideNavButton active={monitoramentoTab === "gen"} collapsed={collapsed}
-              label="Geração" onClick={() => onSelectMonitoramentoTab("gen")} />
-            <SideNavButton active={monitoramentoTab === "combiners"} collapsed={collapsed}
-              label="Combiners" onClick={() => onSelectMonitoramentoTab("combiners")} />
           </div>
           )}
         </div>
@@ -3540,7 +3540,7 @@ export default function App() {
     setHistoricoTab(tab);
     setView("historico");
   }, []);
-  const [monitoramentoTab, setMonitoramentoTab] = useState("vars");
+  const [monitoramentoTab, setMonitoramentoTab] = useState("gen");
   const selectMonitoramentoTab = useCallback((tab) => {
     setMonitoramentoTab(tab);
     setView("monitoramento");
