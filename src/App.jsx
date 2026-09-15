@@ -2425,7 +2425,7 @@ function Sidebar({
         <div>
           <SideNavButton active={view === "overview"} collapsed={collapsed} label="Visão geral" onClick={() => onNavigate(null)} />
 
-          {view !== "historico" && (
+          {view !== "historico" && view !== "monitoramento" && (
           <div style={{
             display: "flex", flexDirection: "column", gap: 1, marginTop: 4,
             marginLeft: 10, paddingLeft: 8, borderLeft: "1px solid rgba(255,255,255,0.16)",
